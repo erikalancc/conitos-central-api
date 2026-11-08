@@ -14,9 +14,29 @@ use App\Models\SaborModel;
 
 class Catalogo extends BaseApiController
 {
-    // GET /api/v1/catalogo — todo lo que necesita el POS para armar pedidos (solo lo activo)
+    /**
+     * GET /api/v1/catalogo — todo lo que necesita el POS para armar pedidos (solo lo activo).
+     * Productos y precios son los de la sucursal del usuario de la sesión:
+     * solo lo que se vende ahí (productos_sucursales) y con su precio propio si lo tiene (precios_sucursales).
+     */
     public function index()
     {
+        $idSucursal = service('sesion')->idSucursal();
+        $db         = db_connect();
+
+        $sucursal = $idSucursal === null ? null : $db->table('sucursales')->select('id_sucursal, nombre')->where('id_sucursal', $idSucursal)->get()->getRowArray();
+
+        // Productos a la venta en esta sucursal y precios propios de la sucursal
+        $enSucursal = array_flip(array_map('intval', array_column(
+            $db->table('productos_sucursales')->select('id_producto')->where('id_sucursal', $idSucursal)->get()->getResultArray(),
+            'id_producto'
+        )));
+        $preciosSucursal = array_column(
+            $db->table('precios_sucursales')->where('id_sucursal', $idSucursal)->get()->getResultArray(),
+            'precio',
+            'id_presentacion'
+        );
+
         // Recargos agrupados por presentación (p. ej. Piñón cuesta más en Chico/Grande)
         $recargos = [];
         foreach (model(RecargoSaborModel::class)->findAll() as $r) {
@@ -31,7 +51,7 @@ class Catalogo extends BaseApiController
             $presentaciones[$p['id_producto']][] = [
                 'id'          => (int) $p['id_presentacion'],
                 'nombre'      => $p['nombre'],
-                'precio_base' => (float) $p['precio_base'],
+                'precio_base' => (float) ($preciosSucursal[$p['id_presentacion']] ?? $p['precio_base']),
                 'num_sabores' => (int) $p['num_sabores'],
                 'recargos'    => $recargos[$p['id_presentacion']] ?? [],
             ];
@@ -49,19 +69,24 @@ class Catalogo extends BaseApiController
             $extrasPorProducto[$fila['id_producto']][] = (int) $fila['id_extra'];
         }
 
+        $tiposSabor = SaborModel::tiposPorSabor();
+
         $categorias   = model(CategoriaModel::class)->where('activo', 1)->orderBy('id_categoria')->findAll();
         $idsCategoria = array_column($categorias, 'id_categoria');
 
-        // Sin categoría activa o sin presentaciones activas el producto no se puede vender
+        // Sin categoría activa, sin presentaciones activas o sin venta en esta sucursal, el producto no se ofrece
         $activos = array_filter(
             model(ProductoModel::class)->where('activo', 1)->orderBy('id_categoria')->orderBy('id_producto')->findAll(),
-            static fn (array $p) => in_array($p['id_categoria'], $idsCategoria, false) && isset($presentaciones[$p['id_producto']])
+            static fn (array $p) => in_array($p['id_categoria'], $idsCategoria, false)
+                && isset($presentaciones[$p['id_producto']])
+                && isset($enSucursal[(int) $p['id_producto']])
         );
 
         $productos = array_map(static fn (array $p) => [
             'id'             => (int) $p['id_producto'],
             'id_categoria'   => (int) $p['id_categoria'],
             'nombre'         => $p['nombre'],
+            'imagen'         => $p['imagen'] ?? null,
             'requiere_sabor' => (bool) $p['requiere_sabor'],
             'tipo_sabor'     => $p['tipo_sabor'],
             'presentaciones' => $presentaciones[$p['id_producto']] ?? [],
@@ -69,6 +94,9 @@ class Catalogo extends BaseApiController
         ], array_values($activos));
 
         return $this->ok([
+            // Sucursal de la que salen productos y precios
+            'sucursal' => $sucursal === null ? null : ['id' => (int) $sucursal['id_sucursal'], 'nombre' => $sucursal['nombre']],
+
             'categorias' => array_map(static fn (array $c) => [
                 'id'     => (int) $c['id_categoria'],
                 'nombre' => $c['nombre'],
@@ -76,10 +104,11 @@ class Catalogo extends BaseApiController
 
             'productos' => $productos,
 
+            // tipos: a qué tipos aplica el sabor (un sabor puede servir para helado y paleta, etc.)
             'sabores' => array_map(static fn (array $s) => [
                 'id'          => (int) $s['id_sabor'],
                 'nombre'      => $s['nombre'],
-                'tipo'        => $s['tipo_sabor'],
+                'tipos'       => $tiposSabor[(int) $s['id_sabor']] ?? [],
                 'es_especial' => (bool) $s['es_especial'],
             ], model(SaborModel::class)->where('activo', 1)->orderBy('nombre')->findAll()),
 

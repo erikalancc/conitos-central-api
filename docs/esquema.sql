@@ -309,6 +309,7 @@ CREATE TABLE `productos` (
   `id_producto` int(11) NOT NULL AUTO_INCREMENT,
   `id_categoria` int(11) NOT NULL,
   `nombre` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `imagen` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `requiere_sabor` tinyint(1) DEFAULT 0,
   `tipo_sabor` varchar(30) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Tipo de sabores que se pueden elegir (sabores.tipo_sabor)',
   `activo` tinyint(1) NOT NULL DEFAULT 1 COMMENT '0 = oculto en el POS (se conserva para el historial de ventas)',
@@ -367,10 +368,20 @@ CREATE TABLE `roles` (
 CREATE TABLE `sabores` (
   `id_sabor` int(11) NOT NULL AUTO_INCREMENT,
   `nombre` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `tipo_sabor` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL,
   `es_especial` tinyint(1) DEFAULT 0,
   `activo` tinyint(1) NOT NULL DEFAULT 1 COMMENT '0 = oculto en el POS (se conserva para el historial de ventas)',
-  PRIMARY KEY (`id_sabor`)
+  PRIMARY KEY (`id_sabor`),
+  UNIQUE KEY `uq_sabores_nombre` (`nombre`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `sabores_tipos` (
+  `id_sabor` int(11) NOT NULL,
+  `tipo_sabor` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL,
+  PRIMARY KEY (`id_sabor`,`tipo_sabor`),
+  KEY `tipo_sabor` (`tipo_sabor`),
+  CONSTRAINT `sabores_tipos_id_sabor_foreign` FOREIGN KEY (`id_sabor`) REFERENCES `sabores` (`id_sabor`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -476,4 +487,56 @@ CREATE TABLE `ventas` (
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+
+-- Catálogo por sucursal (migración 2026-11-07-100000_CatalogoPorSucursal)
+CREATE TABLE `productos_sucursales` (
+  `id_producto` int(11) NOT NULL,
+  `id_sucursal` int(11) NOT NULL,
+  PRIMARY KEY (`id_producto`,`id_sucursal`),
+  KEY `id_sucursal` (`id_sucursal`),
+  CONSTRAINT `productos_sucursales_id_producto_foreign` FOREIGN KEY (`id_producto`) REFERENCES `productos` (`id_producto`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `productos_sucursales_id_sucursal_foreign` FOREIGN KEY (`id_sucursal`) REFERENCES `sucursales` (`id_sucursal`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `precios_sucursales` (
+  `id_presentacion` int(11) NOT NULL,
+  `id_sucursal` int(11) NOT NULL,
+  `precio` decimal(8,2) NOT NULL,
+  PRIMARY KEY (`id_presentacion`,`id_sucursal`),
+  KEY `id_sucursal` (`id_sucursal`),
+  CONSTRAINT `precios_sucursales_id_presentacion_foreign` FOREIGN KEY (`id_presentacion`) REFERENCES `presentaciones` (`id_presentacion`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `precios_sucursales_id_sucursal_foreign` FOREIGN KEY (`id_sucursal`) REFERENCES `sucursales` (`id_sucursal`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Equipos de frío por sucursal (migración 2026-11-07-120000_EquiposFrioPorSucursal)
+CREATE TABLE `equipos_frio` (
+  `id_equipo` int(11) NOT NULL AUTO_INCREMENT,
+  `id_sucursal` int(11) NOT NULL,
+  `nombre` varchar(60) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `tipo` enum('CONGELADOR','REFRIGERADOR') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'CONGELADOR',
+  `temp_min` decimal(5,2) NOT NULL COMMENT '°C mínimo permitido (puede ser negativo)',
+  `temp_max` decimal(5,2) NOT NULL COMMENT '°C máximo permitido (puede ser negativo)',
+  `activo` tinyint(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`id_equipo`),
+  UNIQUE KEY `id_sucursal_nombre` (`id_sucursal`,`nombre`),
+  CONSTRAINT `equipos_frio_id_sucursal_foreign` FOREIGN KEY (`id_sucursal`) REFERENCES `sucursales` (`id_sucursal`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- checklist_registros: + id_sucursal INT NOT NULL (FK sucursales), UNIQUE (fecha, id_sucursal) en lugar de UNIQUE (fecha)
+-- checklist_temperaturas: + id_equipo INT NULL (FK equipos_frio ON DELETE SET NULL), + temp_min DECIMAL(5,2) NULL, + temp_max DECIMAL(5,2) NULL
+
+-- Migración 2026-11-08-100000_CorteVendedor
+-- sucursales: + ventas_visibles_vendedor SMALLINT UNSIGNED NOT NULL DEFAULT 5 COMMENT 'Últimas ventas que ve el vendedor (0 = ninguna)'
+-- cortes_caja: + fondo_siguiente DECIMAL(10,2) NULL COMMENT 'Fondo que se deja para el siguiente turno'
+
+-- Migración 2026-11-08-120000_ChecklistConfigurable
+-- checklist_items: + momento ENUM('APERTURA','MEDIO_TURNO','CIERRE') NOT NULL DEFAULT 'APERTURA', + es_fijo TINYINT(1) NOT NULL DEFAULT 0
+-- checklist_registros: + momento ENUM('APERTURA','MEDIO_TURNO','CIERRE') NOT NULL DEFAULT 'APERTURA'; UNIQUE (fecha, id_sucursal, momento)
+CREATE TABLE `checklist_items_sucursales` (
+  `id_item` int(11) NOT NULL,
+  `id_sucursal` int(11) NOT NULL,
+  PRIMARY KEY (`id_item`,`id_sucursal`),
+  KEY `id_sucursal` (`id_sucursal`),
+  CONSTRAINT `checklist_items_sucursales_id_item_foreign` FOREIGN KEY (`id_item`) REFERENCES `checklist_items` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `checklist_items_sucursales_id_sucursal_foreign` FOREIGN KEY (`id_sucursal`) REFERENCES `sucursales` (`id_sucursal`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

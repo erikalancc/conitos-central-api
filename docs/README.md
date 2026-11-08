@@ -38,6 +38,8 @@ API REST del POS de Conitos Central. Todas las rutas viven bajo `/api/v1` y habl
 | POST | `/admin/{recurso}` | Admin | Alta de categoría, producto, sabor, extra o promoción | [admin-catalogo.md](endpoints/admin-catalogo.md#post-adminrecurso) |
 | PUT | `/admin/{recurso}/{id}` | Admin | Edición (acepta cambios parciales, p. ej. activar/desactivar) | [admin-catalogo.md](endpoints/admin-catalogo.md#put-adminrecursoid) |
 | DELETE | `/admin/{recurso}/{id}` | Admin | Borra si nunca se ha vendido | [admin-catalogo.md](endpoints/admin-catalogo.md#delete-adminrecursoid) |
+| POST | `/admin/productos/{id}/imagen` | Admin | Sube la imagen del producto (JPG/JPEG/PNG/WEBP, máx. 5 MB) | [admin-catalogo.md](endpoints/admin-catalogo.md#post-adminproductosidimagen) |
+| DELETE | `/admin/productos/{id}/imagen` | Admin | Quita la imagen del producto | [admin-catalogo.md](endpoints/admin-catalogo.md#delete-adminproductosidimagen) |
 
 ## Autenticación
 

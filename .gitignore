@@ -124,3 +124,7 @@ _modules/*
 
 /results/
 /phpunit.xml
+
+# Imágenes de productos subidas desde Administración (no se versionan)
+/public/uploads/productos/*
+!/public/uploads/productos/.gitkeep

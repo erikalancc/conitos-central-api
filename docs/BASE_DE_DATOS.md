@@ -33,10 +33,11 @@ erDiagram
   extras_toppings ||--o{ productos_extras : "se ofrece en"
   sabores ||--o{ recargos_sabores : "cuesta más en"
   presentaciones ||--o{ recargos_sabores : tiene
-  productos }o..o{ sabores : "tipo_sabor = tipo_sabor"
+  sabores ||--o{ sabores_tipos : "aplica para"
+  productos }o..o{ sabores_tipos : "tipo_sabor = tipo_sabor"
 ```
 
-> `productos.tipo_sabor` ↔ `sabores.tipo_sabor` no es llave foránea: es el texto que indica qué familia de sabores se ofrece (Helado, Paleta Agua, Paleta Crema, Agua Fresca).
+> `productos.tipo_sabor` ↔ `sabores_tipos.tipo_sabor` no es llave foránea. Un sabor puede aplicar a **varios tipos** (tabla `sabores_tipos`, migración `2026-11-06-130000_SaboresTipos`, que reemplazó la columna `sabores.tipo_sabor`). El texto: es el texto que indica qué familia de sabores se ofrece (Helado, Paleta Agua, Paleta Crema, Agua Fresca).
 
 ### Ventas y caja
 
@@ -172,7 +173,7 @@ Notación: **PK** llave primaria · **FK** llave foránea (regla al borrar el pa
 |---|---|---|
 | `id_sabor` | int | PK |
 | `nombre` | varchar(50) | |
-| `tipo_sabor` | varchar(30) | Helado · Paleta Agua · Paleta Crema · Agua Fresca |
+| ~~`tipo_sabor`~~ | — | *Se quitó (2026-11-06)*. Los tipos del sabor están en `sabores_tipos (id_sabor, tipo_sabor)`: uno o varios por sabor (Helado · Paleta Agua · Paleta Crema · Agua Fresca) |
 | `es_especial` | tinyint(1) | Premium (suele llevar recargo) |
 | `activo` | tinyint(1) | *nuevo* |
 
@@ -337,3 +338,45 @@ Detalle en [endpoints/checklist.md](endpoints/checklist.md).
 | `2026-10-21-110000_UsuariosCatalogo` | `usuarios.id_sucursal` (los existentes quedan en la matriz) y `usuarios.ultimo_acceso` |
 
 Para instalar en un servidor nuevo, ver [PENDIENTES.md](PENDIENTES.md#base-de-datos): hoy las tablas base no tienen migración.
+
+## Catálogo por sucursal (2026-11-07)
+
+Migración `2026-11-07-100000_CatalogoPorSucursal`. El producto existe una sola vez; por sucursal:
+
+| Tabla | Columnas | Significado |
+|---|---|---|
+| `productos_sucursales` | `id_producto`, `id_sucursal` (PK compuesta, FK con cascada) | El producto **se vende** en esa sucursal. Sin fila = no se vende ahí |
+| `precios_sucursales` | `id_presentacion`, `id_sucursal` (PK compuesta, FK con cascada), `precio` decimal(8,2) | Precio **distinto al general** en esa sucursal. Sin fila = `presentaciones.precio_base` |
+
+Al migrar, todos los productos quedaron a la venta en todas las sucursales y sin precios propios. Las sucursales nuevas reciben todos los productos. La sucursal con la que trabaja un usuario es `usuarios.id_sucursal` (o la matriz si no tiene).
+
+## Equipos de frío y checklist por sucursal (2026-11-07)
+
+Migración `2026-11-07-120000_EquiposFrioPorSucursal`:
+
+| Cambio | Detalle |
+|---|---|
+| Tabla `equipos_frio` | `id_equipo`, `id_sucursal` (FK cascada), `nombre` (único por sucursal), `tipo` ENUM(CONGELADOR, REFRIGERADOR), `temp_min`, `temp_max` decimal(5,2) (admiten negativos), `activo`. Cada sucursal arrancó con *Congelador* (-30 a -15) y *Refrigerador* (0 a 5) |
+| `checklist_registros.id_sucursal` | NOT NULL, FK a `sucursales`. La llave única pasó de `fecha` a `(fecha, id_sucursal)`: un checklist por día **por sucursal**. Los registros anteriores se asignaron a la sucursal de quien los hizo |
+| `checklist_temperaturas` | Nuevas `id_equipo` (FK, `SET NULL` al borrar el equipo), `temp_min`, `temp_max` (rango vigente al capturar). `sensor` guarda el nombre del equipo |
+
+## Corte por pasos y vista del vendedor (2026-11-08)
+
+Migración `2026-11-08-100000_CorteVendedor`:
+
+| Columna | Detalle |
+|---|---|
+| `sucursales.ventas_visibles_vendedor` | SMALLINT UNSIGNED, default 5. Últimas ventas que ve el vendedor (0 = ninguna) |
+| `cortes_caja.fondo_siguiente` | DECIMAL(10,2) NULL. Efectivo que se deja en gaveta para el siguiente turno; se propone como fondo inicial al abrir caja |
+
+## Checklist configurable (2026-11-08)
+
+Migración `2026-11-08-120000_ChecklistConfigurable`:
+
+| Cambio | Detalle |
+|---|---|
+| `checklist_items.momento` | ENUM(APERTURA, MEDIO_TURNO, CIERRE), default APERTURA |
+| `checklist_items.es_fijo` | 1 en el punto de refrigeradores y congeladores (no se edita ni se borra) |
+| Tabla `checklist_items_sucursales` | `id_item`, `id_sucursal` (PK compuesta, FK con cascada). Sin filas = el punto aplica en todas las sucursales |
+| `checklist_registros.momento` | ENUM igual; la llave única pasó a `(fecha, id_sucursal, momento)` |
+

@@ -10,6 +10,7 @@ use App\Models\ProductoModel;
 use App\Models\PromocionModel;
 use App\Models\RecargoSaborModel;
 use App\Models\SaborModel;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Model;
 
 /**
@@ -27,6 +28,10 @@ class CatalogoAdmin extends BaseApiController
         'extras'      => ['modelo' => ExtraModel::class, 'nombre' => 'El extra'],
         'promociones' => ['modelo' => PromocionModel::class, 'nombre' => 'La promoción'],
     ];
+
+    // Imágenes de productos: se guardan en public/uploads/productos/ y en la BD va la ruta relativa
+    private const IMAGEN_CARPETA = 'uploads/productos/';
+    private const IMAGEN_MAX_KB  = 5120;
 
     // Campos que llegan como booleanos en JSON y se guardan como 0/1
     private const BOOLEANOS = ['activo', 'activa', 'requiere_sabor', 'es_especial'];
@@ -47,10 +52,18 @@ class CatalogoAdmin extends BaseApiController
         }
 
         $db = db_connect();
-        $db->transStart();
-        $id = $this->modelo($recurso)->insert($this->columnas($recurso, $datos), true);
-        $this->guardarRelaciones($recurso, (int) $id, $datos);
-        $db->transComplete();
+        try {
+            $db->transStart();
+            $id = $this->modelo($recurso)->insert($this->columnas($recurso, $datos), true);
+            $this->guardarRelaciones($recurso, (int) $id, $datos, true);
+            $db->transComplete();
+        } catch (DatabaseException $e) {
+            $db->transRollback();
+            if ($this->esNombreDuplicado($e)) {
+                return $this->failValidationErrors(['nombre' => 'Ya existe un registro con ese nombre.']);
+            }
+            throw $e;
+        }
 
         return $this->ok(['id' => (int) $id, 'catalogo' => $this->catalogo()], 201);
     }
@@ -69,13 +82,21 @@ class CatalogoAdmin extends BaseApiController
         }
 
         $db = db_connect();
-        $db->transStart();
-        $columnas = $this->columnas($recurso, $datos);
-        if ($columnas !== []) {
-            $this->modelo($recurso)->update($id, $columnas);
+        try {
+            $db->transStart();
+            $columnas = $this->columnas($recurso, $datos);
+            if ($columnas !== []) {
+                $this->modelo($recurso)->update($id, $columnas);
+            }
+            $this->guardarRelaciones($recurso, $id, $datos);
+            $db->transComplete();
+        } catch (DatabaseException $e) {
+            $db->transRollback();
+            if ($this->esNombreDuplicado($e)) {
+                return $this->failValidationErrors(['nombre' => 'Ya existe un registro con ese nombre.']);
+            }
+            throw $e;
         }
-        $this->guardarRelaciones($recurso, $id, $datos);
-        $db->transComplete();
 
         return $this->ok(['id' => $id, 'catalogo' => $this->catalogo()]);
     }
@@ -92,9 +113,86 @@ class CatalogoAdmin extends BaseApiController
             return $this->fail(['error' => $motivo], 409);
         }
 
+        if ($recurso === 'productos') {
+            $this->borrarArchivoImagen(model(ProductoModel::class)->find($id)['imagen'] ?? null);
+        }
         $this->modelo($recurso)->delete($id);
 
         return $this->ok(['id' => $id, 'catalogo' => $this->catalogo()]);
+    }
+
+    // POST /api/v1/admin/productos/{id}/imagen — multipart, campo "imagen" (JPG/JPEG/PNG/WEBP, máx. 5 MB)
+    public function subirImagen(int $id)
+    {
+        $producto = model(ProductoModel::class)->find($id);
+        if ($producto === null) {
+            return $this->failNotFound('El producto no existe.');
+        }
+
+        $archivo = $this->request->getFile('imagen');
+        if ($archivo === null || $archivo->getError() === UPLOAD_ERR_NO_FILE) {
+            // Si el cuerpo supera post_max_size, PHP descarta el archivo sin avisar
+            return $this->failValidationErrors(['imagen' => 'No se recibió la imagen. Revisa que sea JPG, JPEG, PNG o WEBP de máximo 5 MB.']);
+        }
+        if (in_array($archivo->getError(), [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+            return $this->failValidationErrors(['imagen' => 'La imagen pesa más de 5 MB.']);
+        }
+
+        $reglas = [
+            'imagen' => [
+                'label'  => 'imagen',
+                'rules'  => 'uploaded[imagen]|max_size[imagen,' . self::IMAGEN_MAX_KB . ']|is_image[imagen]|mime_in[imagen,image/jpeg,image/png,image/webp]|ext_in[imagen,jpg,jpeg,png,webp]',
+                'errors' => [
+                    'uploaded' => 'No se pudo subir la imagen. Intenta de nuevo.',
+                    'max_size' => 'La imagen pesa más de 5 MB.',
+                    'is_image' => 'El archivo no es una imagen válida.',
+                    'mime_in'  => 'La imagen debe ser JPG, JPEG, PNG o WEBP.',
+                    'ext_in'   => 'La imagen debe ser JPG, JPEG, PNG o WEBP.',
+                ],
+            ],
+        ];
+        if (! $this->validate($reglas)) {
+            return $this->failValidationErrors($this->validator->getErrors());
+        }
+
+        $carpeta = FCPATH . self::IMAGEN_CARPETA;
+        if (! is_dir($carpeta)) {
+            mkdir($carpeta, 0755, true);
+        }
+
+        $nombre = "producto-{$id}-" . bin2hex(random_bytes(6)) . '.' . strtolower($archivo->guessExtension() ?: $archivo->getExtension());
+        $archivo->move($carpeta, $nombre);
+
+        db_connect()->table('productos')->where('id_producto', $id)->update(['imagen' => self::IMAGEN_CARPETA . $nombre]);
+        $this->borrarArchivoImagen($producto['imagen'] ?? null);
+
+        return $this->ok(['id' => $id, 'catalogo' => $this->catalogo()]);
+    }
+
+    // DELETE /api/v1/admin/productos/{id}/imagen
+    public function quitarImagen(int $id)
+    {
+        $producto = model(ProductoModel::class)->find($id);
+        if ($producto === null) {
+            return $this->failNotFound('El producto no existe.');
+        }
+
+        db_connect()->table('productos')->where('id_producto', $id)->update(['imagen' => null]);
+        $this->borrarArchivoImagen($producto['imagen'] ?? null);
+
+        return $this->ok(['id' => $id, 'catalogo' => $this->catalogo()]);
+    }
+
+    // Borra el archivo solo si está dentro de la carpeta de imágenes de productos
+    private function borrarArchivoImagen(?string $ruta): void
+    {
+        if ($ruta === null || $ruta === '' || ! str_starts_with($ruta, self::IMAGEN_CARPETA) || str_contains($ruta, '..')) {
+            return;
+        }
+        $archivo = FCPATH . $ruta;
+        if (is_file($archivo)) {
+            @unlink($archivo);
+        }
     }
 
     private function modelo(string $recurso): Model
@@ -113,6 +211,18 @@ class CatalogoAdmin extends BaseApiController
             if (isset($datos[$campo]) && is_string($datos[$campo])) {
                 $datos[$campo] = trim(preg_replace('/\s+/', ' ', $datos[$campo]));
             }
+        }
+
+        // Tipos del sabor: sin espacios de más, sin vacíos y sin repetidos (sin distinguir mayúsculas)
+        if (isset($datos['tipos']) && is_array($datos['tipos'])) {
+            $tipos = [];
+            foreach ($datos['tipos'] as $tipo) {
+                $tipo = trim(preg_replace('/\s+/', ' ', (string) $tipo));
+                if ($tipo !== '') {
+                    $tipos[mb_strtolower($tipo)] ??= $tipo;
+                }
+            }
+            $datos['tipos'] = array_values($tipos);
         }
 
         return $datos;
@@ -149,8 +259,7 @@ class CatalogoAdmin extends BaseApiController
                 'tipo_sabor'     => ['label' => 'tipo de sabor', 'rules' => 'permit_empty|max_length[30]'],
             ],
             'sabores' => [
-                'nombre'     => ['label' => 'nombre', 'rules' => 'required|max_length[50]'],
-                'tipo_sabor' => ['label' => 'tipo de sabor', 'rules' => 'required|max_length[30]'],
+                'nombre' => ['label' => 'nombre', 'rules' => 'required|max_length[50]'],
             ],
             'extras' => [
                 'nombre' => ['label' => 'nombre', 'rules' => 'required|max_length[50]'],
@@ -172,8 +281,13 @@ class CatalogoAdmin extends BaseApiController
             $errores = $this->validator->getErrors();
         }
 
-        if (isset($datos['nombre']) && ! isset($errores['nombre']) && $this->nombreRepetido($recurso, $datos, $id)) {
-            $errores['nombre'] = 'Ya existe un registro con ese nombre.';
+        if (isset($datos['nombre']) && ! isset($errores['nombre'])) {
+            $existente = $this->nombreRepetido($recurso, $datos, $id);
+            if ($existente !== null) {
+                $errores['nombre'] = $recurso === 'sabores'
+                    ? "Ya existe el sabor \"{$existente}\". No se pueden repetir sabores."
+                    : 'Ya existe un registro con ese nombre.';
+            }
         }
 
         if ($recurso === 'productos' && array_key_exists('presentaciones', $datos) && ! isset($errores['presentaciones'])) {
@@ -182,17 +296,27 @@ class CatalogoAdmin extends BaseApiController
 
         if ($recurso === 'productos') {
             $errores += $this->validarSaboresYExtras($datos, $id);
+            $errores += $this->validarSucursales($datos);
         }
 
         if ($recurso === 'sabores' && array_key_exists('recargos', $datos)) {
             $errores += $this->validarRecargos($datos['recargos']);
         }
 
+        // Al crear los tipos son obligatorios; al editar, solo si vienen
+        if ($recurso === 'sabores' && ($creando || array_key_exists('tipos', $datos))) {
+            $errores += $this->validarTipos($datos['tipos'] ?? null);
+        }
+
         return $errores;
     }
 
-    // Nombres únicos (sin distinguir mayúsculas); los productos, dentro de su categoría
-    private function nombreRepetido(string $recurso, array $datos, ?int $id): bool
+    /**
+     * Nombres únicos; los productos, dentro de su categoría. La intercalación de la BD (utf8mb4_unicode_ci)
+     * ignora mayúsculas, acentos y espacios al final: "limon" choca con "Limón".
+     * Devuelve el nombre ya registrado o null si no se repite.
+     */
+    private function nombreRepetido(string $recurso, array $datos, ?int $id): ?string
     {
         $modelo = $this->modelo($recurso);
         $query  = $modelo->builder()->where('LOWER(nombre)', mb_strtolower($datos['nombre']));
@@ -204,7 +328,15 @@ class CatalogoAdmin extends BaseApiController
             $query->where('id_categoria', $categoria);
         }
 
-        return $query->countAllResults() > 0;
+        $fila = $query->select('nombre')->get(1)->getRowArray();
+
+        return $fila['nombre'] ?? null;
+    }
+
+    // Respaldo del índice único de la BD (p. ej. dos guardados al mismo tiempo): error 1062 -> 400 en "nombre"
+    private function esNombreDuplicado(DatabaseException $e): bool
+    {
+        return $e->getCode() === 1062 || str_contains($e->getMessage(), 'Duplicate entry');
     }
 
     private function validarPresentaciones($presentaciones, ?int $idProducto): array
@@ -267,6 +399,64 @@ class CatalogoAdmin extends BaseApiController
         return [];
     }
 
+    /**
+     * Producto por sucursal:
+     *  - sucursales: [id_sucursal, …] donde se vende (al menos una);
+     *  - presentaciones[i].precios_sucursal: { id_sucursal: precio } solo donde el precio es distinto al general.
+     */
+    private function validarSucursales(array $datos): array
+    {
+        $existentes = array_flip(array_map('intval', array_column(
+            db_connect()->table('sucursales')->select('id_sucursal')->get()->getResultArray(),
+            'id_sucursal'
+        )));
+
+        if (array_key_exists('sucursales', $datos)) {
+            if (! is_array($datos['sucursales']) || $datos['sucursales'] === []) {
+                return ['sucursales' => 'Elige al menos una sucursal donde se venda el producto.'];
+            }
+            foreach ($datos['sucursales'] as $idSucursal) {
+                if (! isset($existentes[(int) $idSucursal])) {
+                    return ['sucursales' => 'Alguna de las sucursales elegidas no existe.'];
+                }
+            }
+        }
+
+        foreach (array_values(is_array($datos['presentaciones'] ?? null) ? $datos['presentaciones'] : []) as $i => $p) {
+            $precios = $p['precios_sucursal'] ?? [];
+            if (! is_array($precios)) {
+                return ["presentaciones.{$i}.precios_sucursal" => 'Los precios por sucursal no son válidos.'];
+            }
+            foreach ($precios as $idSucursal => $precio) {
+                if (! isset($existentes[(int) $idSucursal])) {
+                    return ["presentaciones.{$i}.precios_sucursal" => 'Hay un precio para una sucursal que no existe.'];
+                }
+                if ($precio !== null && $precio !== '' && (! is_numeric($precio) || $precio < 0)) {
+                    $nombre = trim((string) ($p['nombre'] ?? ''));
+
+                    return ["presentaciones.{$i}.precios_sucursal.{$idSucursal}" => "El precio de \"{$nombre}\" en la sucursal no es válido."];
+                }
+            }
+        }
+
+        return [];
+    }
+
+    // Tipos a los que aplica el sabor (ya normalizados): al menos uno, máx. 30 caracteres cada uno
+    private function validarTipos($tipos): array
+    {
+        if (! is_array($tipos) || $tipos === []) {
+            return ['tipos' => 'Elige al menos un tipo al que aplica el sabor.'];
+        }
+        foreach ($tipos as $tipo) {
+            if (mb_strlen($tipo) > 30) {
+                return ['tipos' => "El tipo \"{$tipo}\" es muy largo (máx. 30 caracteres)."];
+            }
+        }
+
+        return [];
+    }
+
     private function validarRecargos($recargos): array
     {
         if (! is_array($recargos)) {
@@ -298,10 +488,21 @@ class CatalogoAdmin extends BaseApiController
         return $presentacion !== null && (int) $presentacion['id_producto'] === $idProducto;
     }
 
-    private function guardarRelaciones(string $recurso, int $id, array $datos): void
+    private function guardarRelaciones(string $recurso, int $id, array $datos, bool $creando = false): void
     {
         if ($recurso === 'productos' && array_key_exists('presentaciones', $datos)) {
             $this->sincronizarPresentaciones($id, $datos['presentaciones']);
+        }
+        // Sucursales donde se vende; un producto nuevo sin sucursales indicadas se vende en todas
+        if ($recurso === 'productos' && (array_key_exists('sucursales', $datos) || $creando)) {
+            $ids = array_key_exists('sucursales', $datos)
+                ? array_unique(array_map('intval', $datos['sucursales']))
+                : array_map('intval', array_column(db_connect()->table('sucursales')->select('id_sucursal')->get()->getResultArray(), 'id_sucursal'));
+            $tabla = db_connect()->table('productos_sucursales');
+            $tabla->where('id_producto', $id)->delete();
+            foreach ($ids as $idSucursal) {
+                $tabla->insert(['id_producto' => $id, 'id_sucursal' => $idSucursal]);
+            }
         }
         if ($recurso === 'productos' && array_key_exists('extras', $datos)) {
             $tabla = db_connect()->table('productos_extras');
@@ -312,6 +513,13 @@ class CatalogoAdmin extends BaseApiController
         }
         if ($recurso === 'sabores' && array_key_exists('recargos', $datos)) {
             $this->sincronizarRecargos($id, $datos['recargos']);
+        }
+        if ($recurso === 'sabores' && array_key_exists('tipos', $datos)) {
+            $tabla = db_connect()->table('sabores_tipos');
+            $tabla->where('id_sabor', $id)->delete();
+            foreach ($datos['tipos'] as $tipo) {
+                $tabla->insert(['id_sabor' => $id, 'tipo_sabor' => $tipo]);
+            }
         }
     }
 
@@ -331,10 +539,23 @@ class CatalogoAdmin extends BaseApiController
                 'activo'      => filter_var($p['activo'] ?? true, FILTER_VALIDATE_BOOLEAN) ? 1 : 0,
             ];
             if (isset($p['id'], $existentes[$p['id']])) {
-                $modelo->update((int) $p['id'], $fila);
-                $recibidas[(int) $p['id']] = true;
+                $idPresentacion = (int) $p['id'];
+                $modelo->update($idPresentacion, $fila);
+                $recibidas[$idPresentacion] = true;
             } else {
-                $modelo->insert($fila);
+                $idPresentacion = (int) $modelo->insert($fila, true);
+            }
+
+            // Precios por sucursal: se guardan solo los que difieren del general (vacío = precio general)
+            if (array_key_exists('precios_sucursal', $p) && is_array($p['precios_sucursal'])) {
+                $tabla = db_connect()->table('precios_sucursales');
+                $tabla->where('id_presentacion', $idPresentacion)->delete();
+                foreach ($p['precios_sucursal'] as $idSucursal => $precio) {
+                    if ($precio === null || $precio === '' || round((float) $precio, 2) === $fila['precio_base']) {
+                        continue;
+                    }
+                    $tabla->insert(['id_presentacion' => $idPresentacion, 'id_sucursal' => (int) $idSucursal, 'precio' => round((float) $precio, 2)]);
+                }
             }
         }
 
@@ -410,6 +631,19 @@ class CatalogoAdmin extends BaseApiController
         return null;
     }
 
+    private function tiposEnUso(array $sabores, array $productos): array
+    {
+        $tipos = [];
+        foreach (array_merge(array_merge(...array_column($sabores, 'tipos')) ?: [], array_column($productos, 'tipo_sabor')) as $tipo) {
+            if ($tipo !== null && $tipo !== '') {
+                $tipos[mb_strtolower($tipo)] ??= $tipo;
+            }
+        }
+        natcasesort($tipos);
+
+        return array_values($tipos);
+    }
+
     // Catálogo completo para la pantalla de administración
     private function catalogo(): array
     {
@@ -432,15 +666,23 @@ class CatalogoAdmin extends BaseApiController
             'id_promocion'
         )));
 
+        // Precios propios por sucursal: [id_presentacion][id_sucursal] = precio (solo los distintos al general)
+        $preciosSucursal = [];
+        foreach ($db->table('precios_sucursales')->get()->getResultArray() as $fila) {
+            $preciosSucursal[(int) $fila['id_presentacion']][(int) $fila['id_sucursal']] = (float) $fila['precio'];
+        }
+
         $presentaciones = [];
         foreach (model(PresentacionModel::class)->orderBy('id_presentacion')->findAll() as $p) {
             $presentaciones[$p['id_producto']][] = [
-                'id'          => (int) $p['id_presentacion'],
-                'nombre'      => $p['nombre'],
-                'precio_base' => (float) $p['precio_base'],
-                'num_sabores' => (int) $p['num_sabores'],
-                'activo'      => (bool) $p['activo'],
-                'vendida'     => isset($vendidas[(int) $p['id_presentacion']]),
+                'id'               => (int) $p['id_presentacion'],
+                'nombre'           => $p['nombre'],
+                'precio_base'      => (float) $p['precio_base'],
+                'num_sabores'      => (int) $p['num_sabores'],
+                'activo'           => (bool) $p['activo'],
+                'vendida'          => isset($vendidas[(int) $p['id_presentacion']]),
+                // { "id_sucursal": precio } — objeto JSON aunque esté vacío
+                'precios_sucursal' => (object) ($preciosSucursal[(int) $p['id_presentacion']] ?? []),
             ];
         }
 
@@ -449,19 +691,27 @@ class CatalogoAdmin extends BaseApiController
             $extrasPorProducto[$fila['id_producto']][] = (int) $fila['id_extra'];
         }
 
-        $productos = array_map(static function (array $p) use ($presentaciones, $extrasPorProducto) {
+        // Sucursales donde se vende cada producto
+        $sucursalesPorProducto = [];
+        foreach ($db->table('productos_sucursales')->orderBy('id_sucursal')->get()->getResultArray() as $fila) {
+            $sucursalesPorProducto[$fila['id_producto']][] = (int) $fila['id_sucursal'];
+        }
+
+        $productos = array_map(static function (array $p) use ($presentaciones, $extrasPorProducto, $sucursalesPorProducto) {
             $suyas = $presentaciones[$p['id_producto']] ?? [];
 
             return [
                 'id'             => (int) $p['id_producto'],
                 'id_categoria'   => (int) $p['id_categoria'],
                 'nombre'         => $p['nombre'],
+                'imagen'         => $p['imagen'] ?? null,
                 'requiere_sabor' => (bool) $p['requiere_sabor'],
                 'tipo_sabor'     => $p['tipo_sabor'],
                 'activo'         => (bool) $p['activo'],
                 'vendido'        => in_array(true, array_column($suyas, 'vendida'), true),
                 'presentaciones' => $suyas,
                 'extras'         => $extrasPorProducto[$p['id_producto']] ?? [],
+                'sucursales'     => $sucursalesPorProducto[$p['id_producto']] ?? [],
             ];
         }, model(ProductoModel::class)->orderBy('id_categoria')->orderBy('nombre')->findAll());
 
@@ -487,10 +737,11 @@ class CatalogoAdmin extends BaseApiController
             ];
         }
 
-        $sabores = array_map(static fn (array $s) => [
+        $tiposSabor = SaborModel::tiposPorSabor();
+        $sabores    = array_map(static fn (array $s) => [
             'id'          => (int) $s['id_sabor'],
             'nombre'      => $s['nombre'],
-            'tipo'        => $s['tipo_sabor'],
+            'tipos'       => $tiposSabor[(int) $s['id_sabor']] ?? [],
             'es_especial' => (bool) $s['es_especial'],
             'activo'      => (bool) $s['activo'],
             'vendido'     => isset($saboresUsados[(int) $s['id_sabor']]),
@@ -499,6 +750,14 @@ class CatalogoAdmin extends BaseApiController
         ], model(SaborModel::class)->orderBy('nombre')->findAll());
 
         return [
+            // Sucursales para asignar productos y precios (la matriz primero)
+            'sucursales' => array_map(static fn (array $s) => [
+                'id'        => (int) $s['id_sucursal'],
+                'nombre'    => $s['nombre'],
+                'es_matriz' => (bool) $s['es_matriz'],
+                'activo'    => (bool) $s['activo'],
+            ], $db->table('sucursales')->select('id_sucursal, nombre, es_matriz, activo')->orderBy('es_matriz', 'DESC')->orderBy('nombre')->get()->getResultArray()),
+
             'categorias' => array_map(static fn (array $c) => [
                 'id'        => (int) $c['id_categoria'],
                 'nombre'    => $c['nombre'],
@@ -509,7 +768,8 @@ class CatalogoAdmin extends BaseApiController
             'productos' => $productos,
 
             'sabores'     => $sabores,
-            'tipos_sabor' => array_values(array_unique(array_column($sabores, 'tipo'))),
+            // Todos los tipos en uso (de los sabores y de los productos), sin repetir y en orden alfabético
+            'tipos_sabor' => $this->tiposEnUso($sabores, $productos),
 
             'extras' => array_map(static fn (array $e) => [
                 'id'      => (int) $e['id_extra'],

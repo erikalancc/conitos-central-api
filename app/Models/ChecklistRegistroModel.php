@@ -11,36 +11,50 @@ class ChecklistRegistroModel extends Model
     protected $primaryKey    = 'id_registro';
     protected $returnType    = 'array';
     protected $useTimestamps = true;
-    protected $allowedFields = ['fecha', 'id_usuario', 'estado', 'con_incidencia', 'comentarios', 'id_usuario_autoriza', 'fecha_autorizacion'];
+    protected $allowedFields = ['fecha', 'id_sucursal', 'momento', 'id_usuario', 'estado', 'con_incidencia', 'comentarios', 'id_usuario_autoriza', 'fecha_autorizacion'];
 
-    // Registro del día con el nombre de quien lo hizo, o null
-    public function delDia(string $fecha): ?array
+    // Registro del día de la sucursal en un momento (APERTURA, MEDIO_TURNO, CIERRE) con quien lo hizo, o null
+    public function delDia(string $fecha, ?int $idSucursal, string $momento = 'APERTURA'): ?array
     {
         $registro = $this->select('checklist_registros.*, usuarios.nombre AS usuario_nombre')
             ->join('usuarios', 'usuarios.id_usuario = checklist_registros.id_usuario')
             ->where('fecha', $fecha)
+            ->where('checklist_registros.id_sucursal', $idSucursal)
+            ->where('momento', $momento)
             ->first();
 
         return $registro === null ? null : self::publico($registro);
+    }
+
+    // ¿Hoy falta completar el checklist de ese momento en la sucursal? (solo si tiene puntos configurados)
+    public function faltaCompletar(string $momento, ?int $idSucursal): bool
+    {
+        if (model(ChecklistItemModel::class)->activos($momento, $idSucursal) === []) {
+            return false;
+        }
+
+        return ($this->delDia(date('Y-m-d'), $idSucursal, $momento)['estado'] ?? null) !== 'COMPLETADO';
     }
 
     /**
      * Guarda el checklist completado del día con sus respuestas y temperaturas.
      * Si ese día ya había una omisión, la reemplaza.
      *
-     * @param list<array{id_item:int, cumplido:bool, valor:?string, temperaturas:list<array{sensor:string, grados:float, en_rango:bool}>}> $respuestas
+     * @param list<array{id_item:int, cumplido:bool, valor:?string, temperaturas:list<array{sensor:string, id_equipo:?int, grados:float, temp_min:?float, temp_max:?float, en_rango:bool}>}> $respuestas
      */
-    public function guardarCompletado(string $fecha, int $idUsuario, array $respuestas, bool $conIncidencia, ?string $comentarios): void
+    public function guardarCompletado(string $fecha, ?int $idSucursal, string $momento, int $idUsuario, array $respuestas, bool $conIncidencia, ?string $comentarios): void
     {
         $this->db->transException(true)->transStart();
 
-        $omitido = $this->where('fecha', $fecha)->where('estado', 'OMITIDO')->first();
+        $omitido = $this->where('fecha', $fecha)->where('id_sucursal', $idSucursal)->where('momento', $momento)->where('estado', 'OMITIDO')->first();
         if ($omitido !== null) {
             $this->delete($omitido['id_registro']);
         }
 
         $idRegistro = $this->insert([
             'fecha'          => $fecha,
+            'id_sucursal'    => $idSucursal,
+            'momento'        => $momento,
             'id_usuario'     => $idUsuario,
             'estado'         => 'COMPLETADO',
             'con_incidencia' => (int) $conIncidencia,
@@ -63,8 +77,11 @@ class ChecklistRegistroModel extends Model
             foreach ($respuesta['temperaturas'] as $lectura) {
                 $this->db->table('checklist_temperaturas')->insert([
                     'id_respuesta' => $idRespuesta,
-                    'sensor'       => $lectura['sensor'],
+                    'id_equipo'    => $lectura['id_equipo'] ?? null,
+                    'sensor'       => mb_substr($lectura['sensor'], 0, 30),
                     'grados'       => $lectura['grados'],
+                    'temp_min'     => $lectura['temp_min'] ?? null,
+                    'temp_max'     => $lectura['temp_max'] ?? null,
                     'en_rango'     => (int) $lectura['en_rango'],
                 ]);
             }
@@ -78,6 +95,7 @@ class ChecklistRegistroModel extends Model
         return [
             'id'             => (int) $registro['id_registro'],
             'fecha'          => $registro['fecha'],
+            'momento'        => array_search($registro['momento'] ?? 'APERTURA', ChecklistItemModel::MOMENTOS, true),
             'estado'         => $registro['estado'],
             'con_incidencia' => (bool) $registro['con_incidencia'],
             'comentarios'    => $registro['comentarios'],

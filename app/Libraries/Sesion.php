@@ -8,13 +8,21 @@ namespace App\Libraries;
  */
 class Sesion
 {
-    private ?int $idUsuario = null;
-    private ?int $idRol     = null;
+    private ?int $idUsuario  = null;
+    private ?int $idRol      = null;
+    private ?int $idSucursal = null;
 
-    public function iniciar(int $idUsuario, int $idRol): void
+    public function iniciar(int $idUsuario, int $idRol, ?int $idSucursal = null): void
     {
-        $this->idUsuario = $idUsuario;
-        $this->idRol     = $idRol;
+        $this->idUsuario  = $idUsuario;
+        $this->idRol      = $idRol;
+        $this->idSucursal = $idSucursal;
+    }
+
+    // Sucursal con la que trabaja el usuario (la suya o la matriz): define productos y precios del POS
+    public function idSucursal(): ?int
+    {
+        return $this->idSucursal;
     }
 
     public function idUsuario(): ?int

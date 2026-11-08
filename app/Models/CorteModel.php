@@ -20,13 +20,22 @@ class CorteModel extends Model
     protected $allowedFields = [
         'estado', 'id_usuario_apertura', 'fecha_apertura', 'fondo_inicial', 'comentario_apertura',
         'id_usuario_cierre', 'fecha_cierre', 'tickets', 'ventas_brutas', 'descuentos', 'ventas_netas',
-        'ventas_efectivo', 'ventas_tarjeta', 'entradas', 'retiros', 'efectivo_esperado', 'efectivo_contado',
+        'ventas_efectivo', 'ventas_tarjeta', 'entradas', 'retiros', 'efectivo_esperado', 'efectivo_contado', 'fondo_siguiente',
         'diferencia_efectivo', 'tarjeta_terminal', 'vouchers', 'diferencia_tarjeta', 'observaciones',
     ];
 
     public function abierto(): ?array
     {
         return $this->where('estado', 'ABIERTO')->orderBy('id_corte', 'DESC')->first();
+    }
+
+    // Fondo que se dejó en el último corte: se propone como fondo inicial al abrir caja (null si no hay)
+    public function fondoSugerido(): ?float
+    {
+        $fila = $this->select('fondo_siguiente')->where('estado', 'CERRADO')->where('fondo_siguiente IS NOT NULL')
+            ->orderBy('fecha_cierre', 'DESC')->first();
+
+        return $fila === null ? null : round((float) $fila['fondo_siguiente'], 2);
     }
 
     /**
@@ -209,6 +218,8 @@ class CorteModel extends Model
                 'esperado'   => $cerrado ? $numero($c['efectivo_esperado']) : round($fondo + $ventas['ventas_efectivo'] + $entradas - $retiros, 2),
                 'contado'    => $numero($c['efectivo_contado']),
                 'diferencia' => $numero($c['diferencia_efectivo']),
+                // Lo que se dejó en gaveta para el siguiente turno; el resto se entregó a depósito
+                'fondo_siguiente' => $numero($c['fondo_siguiente']),
                 'conteo'     => $conteo,
             ],
             'tarjeta' => [

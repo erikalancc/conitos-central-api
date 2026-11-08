@@ -100,3 +100,26 @@ Borra la sucursal y sus terminales. `409` si es la matriz.
 | 401 / 403 | Sin token, token vencido o rol que no es Administrador |
 | 404 | La sucursal no existe |
 | 409 | Desactivar o eliminar la matriz |
+
+## Congeladores y refrigeradores (`equipos_frio`)
+
+Cada sucursal tiene sus equipos de frío; se revisan en el checklist de apertura de esa sucursal.
+
+- `GET /admin/sucursales`: cada sucursal trae `equipos_frio: [{ id, nombre, tipo: "congelador" | "refrigerador", temp_min, temp_max, activo }]`.
+- `POST/PUT /admin/sucursales`: `equipos_frio` es opcional; si viene, **reemplaza la lista** (con `id` se actualiza, sin `id` se crea, los que no vienen se borran).
+  - `nombre`: obligatorio, máx. 60, sin repetir en la sucursal.
+  - `temp_min` / `temp_max`: °C entre -60 y 30 (**se permiten negativos**); la mínima debe ser menor que la máxima.
+  - Borrar un equipo no borra sus lecturas pasadas: conservan nombre y rango (`id_equipo` queda en `null`).
+- Errores `400`: `equipos_frio.{i}.nombre`, `equipos_frio.{i}.tipo`, `equipos_frio.{i}.temp_min`, `equipos_frio.{i}.temp_max`.
+
+```json
+{ "equipos_frio": [
+  { "id": 1, "nombre": "Congelador", "tipo": "congelador", "temp_min": -30, "temp_max": -15 },
+  { "nombre": "Congelador paletas", "tipo": "congelador", "temp_min": -25.5, "temp_max": -18 }
+] }
+```
+
+## Últimas ventas visibles para el vendedor (2026-11-08)
+
+`ventas_visibles_vendedor` (entero de 0 a 100; por defecto 5) en `GET/POST/PUT /admin/sucursales`. Es cuántas de las últimas ventas ve el Vendedor / Cajero de esa sucursal en el historial del día y en el corte de caja (0 = ninguna).
+

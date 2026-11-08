@@ -24,6 +24,10 @@ class Ventas extends BaseApiController
     // GET /api/v1/ventas/resumen?desde=AAAA-MM-DD&hasta=AAAA-MM-DD — totales por día (default: últimas 8 semanas)
     public function resumen()
     {
+        if ($this->esVendedor()) {
+            return $this->failForbidden('El resumen de ventas solo lo consulta un administrador.');
+        }
+
         $hasta = $this->request->getGet('hasta') ?: date('Y-m-d');
         $desde = $this->request->getGet('desde') ?: date('Y-m-d', strtotime($hasta . ' -55 days'));
 
@@ -59,10 +63,15 @@ class Ventas extends BaseApiController
         if (! $this->esFecha($fecha)) {
             return $this->failValidationErrors(['fecha' => 'Usa el formato AAAA-MM-DD.']);
         }
+        // El vendedor solo consulta el día de hoy, y solo sus últimas ventas permitidas
+        if ($this->esVendedor() && $fecha !== date('Y-m-d')) {
+            return $this->failForbidden('Solo puedes consultar las ventas de hoy.');
+        }
 
         return $this->ok([
-            'fecha'  => $fecha,
-            'ventas' => model(VentaModel::class)->delDia($fecha),
+            'fecha'           => $fecha,
+            'ventas'          => $this->ventasVisibles(model(VentaModel::class)->delDia($fecha)),
+            'ventas_visibles' => $this->limiteVentas(),
         ]);
     }
 
@@ -199,19 +208,27 @@ class Ventas extends BaseApiController
             return $this->linea(null, (int) $promo['id_promocion'], $cantidad, $precio, $notas, [], []);
         }
 
+        // Precio y disponibilidad de la sucursal del vendedor (precio propio de la sucursal o el general)
+        $idSucursal   = (int) service('sesion')->idSucursal();
         $presentacion = $db->table('presentaciones p')
-            ->select('p.*, pr.nombre AS producto, pr.requiere_sabor, pr.tipo_sabor, pr.activo AS producto_activo, c.activo AS categoria_activa')
+            ->select('p.*, pr.nombre AS producto, pr.requiere_sabor, pr.tipo_sabor, pr.activo AS producto_activo, c.activo AS categoria_activa, '
+                . 'ps.id_sucursal AS en_sucursal, prs.precio AS precio_sucursal')
             ->join('productos pr', 'pr.id_producto = p.id_producto')
             ->join('categorias c', 'c.id_categoria = pr.id_categoria')
+            ->join('productos_sucursales ps', "ps.id_producto = pr.id_producto AND ps.id_sucursal = {$idSucursal}", 'left')
+            ->join('precios_sucursales prs', "prs.id_presentacion = p.id_presentacion AND prs.id_sucursal = {$idSucursal}", 'left')
             ->where('p.id_presentacion', (int) ($linea['id_presentacion'] ?? 0))
             ->get()->getRowArray();
 
         if ($presentacion === null || ! $presentacion['activo'] || ! $presentacion['producto_activo'] || ! $presentacion['categoria_activa']) {
             return 'El producto ya no está disponible.';
         }
+        if ($presentacion['en_sucursal'] === null) {
+            return "{$presentacion['producto']} no se vende en esta sucursal.";
+        }
 
         $producto = $presentacion['producto'];
-        $precio   = (float) $presentacion['precio_base'];
+        $precio   = (float) ($presentacion['precio_sucursal'] ?? $presentacion['precio_base']);
 
         if ($presentacion['requiere_sabor']) {
             $esperados = (int) $presentacion['num_sabores'];
@@ -219,8 +236,11 @@ class Ventas extends BaseApiController
                 return "{$producto}: elige {$esperados} sabor(es).";
             }
             $validos = array_column(
-                $db->table('sabores')->select('id_sabor')->whereIn('id_sabor', array_unique($sabores))
-                    ->where('activo', 1)->where('tipo_sabor', $presentacion['tipo_sabor'])->get()->getResultArray(),
+                // El sabor debe estar activo y aplicar al tipo que pide el producto (sabores_tipos)
+                $db->table('sabores s')->select('s.id_sabor')->distinct()
+                    ->join('sabores_tipos st', 'st.id_sabor = s.id_sabor')
+                    ->whereIn('s.id_sabor', array_unique($sabores))
+                    ->where('s.activo', 1)->where('st.tipo_sabor', $presentacion['tipo_sabor'])->get()->getResultArray(),
                 'id_sabor'
             );
             if (count($validos) !== count(array_unique($sabores))) {

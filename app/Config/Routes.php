@@ -20,9 +20,10 @@ $routes->group('api/v1', ['namespace' => 'App\Controllers\Api\V1', 'filter' => '
         $routes->get('auth/me', 'Auth::me');
         $routes->get('catalogo', 'Catalogo::index');
 
-        $routes->get('checklist/apertura', 'Checklist::apertura');
-        $routes->post('checklist/apertura', 'Checklist::guardar');
-        $routes->post('checklist/apertura/omitir', 'Checklist::omitir');
+        // Checklist operativo por momento del día: apertura, medio-turno o cierre (antes del corte)
+        $routes->get('checklist/(apertura|medio-turno|cierre)', 'Checklist::ver/$1');
+        $routes->post('checklist/(apertura|medio-turno|cierre)', 'Checklist::guardar/$1');
+        $routes->post('checklist/(apertura|medio-turno|cierre)/omitir', 'Checklist::omitir/$1');
     });
 
     // Ventas (cobro e historial): Administrador y Vendedor / Cajero
@@ -55,6 +56,16 @@ $routes->group('api/v1', ['namespace' => 'App\Controllers\Api\V1', 'filter' => '
         $routes->post('sucursales', 'Sucursales::crear');
         $routes->put('sucursales/(:num)', 'Sucursales::actualizar/$1');
         $routes->delete('sucursales/(:num)', 'Sucursales::eliminar/$1');
+
+        // Checklist operativo: puntos por momento del día y sucursal
+        $routes->get('checklist', 'ChecklistAdmin::index');
+        $routes->post('checklist', 'ChecklistAdmin::crear');
+        $routes->put('checklist/(:num)', 'ChecklistAdmin::actualizar/$1');
+        $routes->delete('checklist/(:num)', 'ChecklistAdmin::eliminar/$1');
+
+        // Imagen del producto (multipart, campo "imagen": JPG/JPEG/PNG/WEBP, máx. 5 MB)
+        $routes->post('productos/(:num)/imagen', 'CatalogoAdmin::subirImagen/$1');
+        $routes->delete('productos/(:num)/imagen', 'CatalogoAdmin::quitarImagen/$1');
 
         $routes->post('(categorias|productos|sabores|extras|promociones)', 'CatalogoAdmin::crear/$1');
         $routes->put('(categorias|productos|sabores|extras|promociones)/(:num)', 'CatalogoAdmin::actualizar/$1/$2');

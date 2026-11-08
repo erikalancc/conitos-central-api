@@ -111,3 +111,11 @@ Un corte con `ventas_detalle` (para reimprimir el ticket). `404` si no existe.
 | 401 / 403 | Sin token, token vencido o rol sin acceso |
 | 404 | El corte no existe |
 | 409 | Abrir con un turno ya abierto; movimientos o cierre sin caja abierta |
+
+## Vendedor y fondo para el siguiente turno (2026-11-08)
+
+- **Ventas visibles (Vendedor / Cajero):** `GET /caja/turno`, `POST /caja/apertura` y `POST /caja/movimientos` devuelven en `ventas_detalle` solo las **últimas N ventas** del turno (N = `sucursales.ventas_visibles_vendedor` de su sucursal) y `ventas_visibles: N`. Los **totales** (`ventas`, `efectivo`, `tarjeta`) siempre son del turno completo. Para el Administrador, `ventas_visibles` es `null` y la lista viene completa.
+- `GET /caja/cortes` y `GET /caja/cortes/{id}`: `403` para el Vendedor / Cajero.
+- `GET /caja/turno` con la caja cerrada: `{ "turno": null, "fondo_sugerido": 800 }` (el `fondo_siguiente` del último corte, para proponerlo al abrir caja; `null` si no hay).
+- `POST /caja/cierre` requiere `fondo_siguiente`: efectivo que se queda en gaveta para el siguiente turno, de 0 a lo contado. Errores: *Indica cuánto efectivo se deja de fondo…* y *El fondo no puede ser mayor al efectivo contado.* Se guarda en `cortes_caja.fondo_siguiente` y se devuelve en `efectivo.fondo_siguiente`. Lo entregado a depósito = `efectivo.contado - efectivo.fondo_siguiente`.
+

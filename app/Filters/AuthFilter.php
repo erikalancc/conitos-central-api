@@ -44,7 +44,7 @@ class AuthFilter implements FilterInterface
             return $this->rechazar(403, 'Tu rol no tiene acceso a este recurso.');
         }
 
-        service('sesion')->iniciar((int) $claims->sub, $idRol);
+        service('sesion')->iniciar((int) $claims->sub, $idRol, $usuario['id_sucursal'] === null ? null : (int) $usuario['id_sucursal']);
 
         return null;
     }

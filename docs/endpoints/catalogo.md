@@ -45,7 +45,7 @@ Solo incluye lo **activo** (`activo = 1`). Un producto también se omite si su c
       }
     ],
     "sabores": [
-      { "id": 3, "nombre": "Piñón", "tipo": "Helado", "es_especial": true }
+      { "id": 3, "nombre": "Piñón", "tipos": ["Helado"], "es_especial": true }
     ],
     "extras": [
       { "id": 3, "nombre": "Bola extra helado regular", "precio": 20 }
@@ -67,7 +67,7 @@ Solo incluye lo **activo** (`activo = 1`). Un producto también se omite si su c
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `requiere_sabor` | bool | El vendedor debe elegir sabor al agregarlo |
-| `tipo_sabor` | string \| null | Qué sabores se ofrecen: los de `sabores[]` con ese `tipo` |
+| `tipo_sabor` | string \| null | Qué sabores se ofrecen: los de `sabores[]` que incluyan ese tipo en `tipos` |
 | `presentaciones` | array | Tamaños o variantes con su `precio_base`. Los productos de un solo precio traen una presentación "Única" |
 | `extras` | int[] | Ids de `extras[]` que se ofrecen en este producto (solo extras activos) |
 
@@ -107,3 +107,14 @@ curl http://localhost:8080/api/v1/catalogo \
 
 - La BD no indica qué **tipo de sabor** usa cada producto. Por ahora el front decide con `sabores[].tipo` (p. ej. "Paleta de Agua" → `Paleta Agua`).
 - La BD no indica qué **extras** aplican a cada producto ni qué productos forman cada **promoción**.
+
+## Catálogo de la sucursal del usuario
+
+`GET /catalogo` responde con los productos y precios de la **sucursal del usuario de la sesión** (`usuarios.id_sucursal`; si no tiene o está inactiva, la matriz):
+
+- `sucursal: { id, nombre }`: de dónde salen productos y precios.
+- Solo aparecen los productos que se venden en esa sucursal (`productos_sucursales`).
+- `presentaciones[].precio_base` ya es el precio de la sucursal (`precios_sucursales` o, si no hay, el general).
+
+`POST /ventas` recalcula con esos mismos precios y rechaza (`400` en `lineas.{i}`) un producto que no se vende en la sucursal del vendedor.
+

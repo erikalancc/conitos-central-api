@@ -52,7 +52,7 @@ Todo el catálogo, **incluido lo inactivo**.
       {
         "id": 3,
         "nombre": "Piñón",
-        "tipo": "Helado",
+        "tipos": ["Helado", "Paleta Crema"],
         "es_especial": true,
         "activo": true,
         "vendido": false,
@@ -82,7 +82,7 @@ Todo el catálogo, **incluido lo inactivo**.
 | `vendido` / `vendida` | `true` si ya aparece en ventas (o en órdenes de producción, para sabores): no se puede borrar |
 | `categorias[].productos` | Productos de la categoría (activos o no): con productos no se puede borrar |
 | `sabores[].inventario` | `null` si el sabor no tiene registro en `inventario_sabores` |
-| `tipos_sabor` | Tipos existentes, para sugerirlos al capturar un sabor |
+| `tipos_sabor` | Tipos en uso (de sabores y productos), en orden alfabético, para sugerirlos al capturar |
 
 ---
 
@@ -114,7 +114,7 @@ Actualiza un registro. Acepta **cambios parciales**: solo se validan y guardan l
 | `nombre` | string | sí | Máx. 100, único dentro de su categoría |
 | `id_categoria` | int | sí | Debe existir |
 | `requiere_sabor` | bool | no | El POS pide sabor al agregarlo |
-| `tipo_sabor` | string \| null | si `requiere_sabor` | Qué sabores se ofrecen (`sabores.tipo_sabor`) |
+| `tipo_sabor` | string \| null | si `requiere_sabor` | Qué sabores se ofrecen (sabores que tengan ese tipo en `tipos`) |
 | `extras` | int[] | no | Ids de extras que se ofrecen; en `PUT` reemplaza la lista actual |
 | `activo` | bool | no | |
 | `presentaciones` | array | sí | Al menos una, y al menos una activa |
@@ -130,7 +130,7 @@ Cada presentación: `{ "id"?, "nombre", "precio_base", "num_sabores"?, "activo"?
 | Campo | Tipo | Obligatorio al crear | Reglas |
 |---|---|---|---|
 | `nombre` | string | sí | Máx. 50, único |
-| `tipo_sabor` | string | sí | Máx. 30 (p. ej. `Helado`, `Paleta Agua`) |
+| `tipos` | string[] | sí (al crear) | Tipos a los que aplica el sabor: al menos uno, máx. 30 caracteres cada uno (p. ej. `["Helado", "Paleta Crema"]`). Se quitan vacíos y repetidos. Al editar reemplaza la lista completa |
 | `es_especial` | bool | no | |
 | `activo` | bool | no | |
 | `recargos` | array | no | `[{ "id_presentacion", "monto" }]`, monto > 0, sin presentaciones repetidas. En `PUT` reemplaza los recargos actuales |
@@ -165,7 +165,30 @@ curl -X POST http://localhost:8080/api/v1/admin/productos \
 
 ## DELETE /admin/{recurso}/{id}
 
-Borra el registro si nunca se ha vendido. Borrar un producto borra sus presentaciones y recargos; borrar un sabor borra su inventario y recargos.
+Borra el registro si nunca se ha vendido. Borrar un producto borra sus presentaciones, recargos y su archivo de imagen; borrar un sabor borra su inventario y recargos.
+
+---
+
+## POST /admin/productos/{id}/imagen
+
+Sube o reemplaza la imagen del producto. Petición `multipart/form-data` con el campo **`imagen`**.
+
+- Formatos: **JPG, JPEG, PNG o WEBP** (se revisan extensión, tipo MIME y que sea una imagen real).
+- Tamaño máximo: **5 MB**. PHP debe permitirlo: `upload_max_filesize` ≥ 6M y `post_max_size` ≥ 8M.
+- El archivo se guarda en `public/uploads/productos/producto-{id}-{aleatorio}.{ext}` y en `productos.imagen` queda la ruta relativa (`uploads/productos/...`). La imagen anterior se borra.
+- Responde `{ id, catalogo }` como las demás escrituras.
+- `GET /catalogo` y `GET /admin/catalogo` devuelven `imagen` (ruta relativa o `null`) en cada producto. La URL pública es `{raíz del API}/{imagen}`, p. ej. `http://localhost:8080/uploads/productos/producto-1-a1b2c3.jpg`.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/productos/1/imagen \
+  -H "Authorization: Bearer <token>" -F "imagen=@helado.jpg"
+```
+
+Errores `400` en `messages.imagen`: *La imagen debe ser JPG, JPEG, PNG o WEBP.* · *La imagen pesa más de 5 MB.* · *El archivo no es una imagen válida.* · *No se recibió la imagen…*
+
+## DELETE /admin/productos/{id}/imagen
+
+Quita la imagen del producto (`imagen = null`) y borra el archivo. Responde `{ id, catalogo }`.
 
 ---
 
@@ -186,3 +209,24 @@ Borra el registro si nunca se ha vendido. Borrar un producto borra sus presentac
   "messages": { "error": "El sabor ya tiene ventas u órdenes de producción; desactívalo para ocultarlo del POS." }
 }
 ```
+
+## Productos por sucursal
+
+El producto se registra **una vez**; por sucursal solo se decide si se vende y, si cambia, su precio.
+
+- `GET /admin/catalogo` trae `sucursales: [{ id, nombre, es_matriz, activo }]`, en cada producto `sucursales: [id, …]` (dónde se vende) y en cada presentación `precios_sucursal: { "id_sucursal": precio }` (solo los precios distintos al general).
+- En `POST/PUT /admin/productos`:
+  - `sucursales`: `int[]`, al menos una. Reemplaza la lista. Si se crea un producto sin este campo, se vende en todas.
+  - `presentaciones[i].precios_sucursal`: `{ "2": 30 }`. Reemplaza los precios propios de esa presentación; un precio vacío o igual al general no se guarda (usa el general).
+- Errores: `sucursales` (*Elige al menos una sucursal…*), `presentaciones.{i}.precios_sucursal.{id_sucursal}` (precio inválido).
+- Una sucursal nueva (`POST /admin/sucursales`) arranca vendiendo todos los productos con su precio general.
+
+```json
+{
+  "sucursales": [1, 2],
+  "presentaciones": [
+    { "id": 7, "nombre": "Única", "precio_base": 25, "precios_sucursal": { "2": 28 } }
+  ]
+}
+```
+

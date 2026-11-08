@@ -83,6 +83,7 @@ class Sucursales extends BaseApiController
             'id_encargado'  => ['label' => 'encargado', 'rules' => 'permit_empty|is_natural_no_zero|is_not_unique[usuarios.id_usuario]'],
             'hora_apertura' => ['label' => 'hora de apertura', 'rules' => 'permit_empty|regex_match[/^([01]\d|2[0-3]):[0-5]\d$/]'],
             'hora_cierre'   => ['label' => 'hora de cierre', 'rules' => 'permit_empty|regex_match[/^([01]\d|2[0-3]):[0-5]\d$/]'],
+            'ventas_visibles_vendedor' => ['label' => 'ventas visibles para el vendedor', 'rules' => 'permit_empty|is_natural|less_than_equal_to[100]'],
         ];
         if (! $creando) {
             $reglas = array_intersect_key($reglas, $datos);
@@ -114,11 +115,21 @@ class Sucursales extends BaseApiController
             }
         }
 
+        // Congeladores y refrigeradores: opcional; si viene, reemplaza la lista
+        $equipos = null;
+        if (array_key_exists('equipos_frio', $datos)) {
+            $equipos = $datos['equipos_frio'];
+            $error   = $this->validarEquipos($equipos, $id);
+            if ($error !== null) {
+                return $this->failValidationErrors($error);
+            }
+        }
+
         if (! $creando && $actual['es_matriz'] && array_key_exists('activo', $datos) && ! filter_var($datos['activo'], FILTER_VALIDATE_BOOLEAN)) {
             return $this->fail(['error' => 'La sucursal matriz no se puede desactivar.'], 409);
         }
 
-        $columnas = array_intersect_key($datos, array_flip(['codigo', 'nombre', 'direccion', 'telefono', 'correo', 'id_encargado', 'hora_apertura', 'hora_cierre']));
+        $columnas = array_intersect_key($datos, array_flip(['codigo', 'nombre', 'direccion', 'telefono', 'correo', 'id_encargado', 'hora_apertura', 'hora_cierre', 'ventas_visibles_vendedor']));
         if (array_key_exists('id_encargado', $columnas) && empty($columnas['id_encargado'])) {
             $columnas['id_encargado'] = null;
         }
@@ -131,7 +142,13 @@ class Sucursales extends BaseApiController
             $columnas['activo'] = filter_var($datos['activo'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
         }
 
-        $id = $modelo->guardar($id, $columnas, $terminales);
+        $id = $modelo->guardar($id, $columnas, $terminales, $equipos);
+
+        // Sucursal nueva: arranca vendiendo todos los productos con su precio general
+        // (después se ajusta en Administración → Productos → Sucursales y precios)
+        if ($creando) {
+            db_connect()->query('INSERT IGNORE INTO productos_sucursales (id_producto, id_sucursal) SELECT id_producto, ? FROM productos', [$id]);
+        }
 
         return $this->ok(['id' => $id] + $this->listado(), $creando ? 201 : 200);
     }
@@ -162,6 +179,50 @@ class Sucursales extends BaseApiController
                 $propia = db_connect()->table('terminales')->where('id_terminal', (int) $t['id'])->where('id_sucursal', $idSucursal)->countAllResults() > 0;
                 if (! $propia) {
                     return ["terminales.{$i}.id" => 'La terminal no pertenece a esta sucursal.'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Equipos de frío: nombre único en la sucursal, tipo congelador/refrigerador y rango en °C
+     * (se permiten negativos; las temperaturas no se validan, solo deben ser números).
+     */
+    private function validarEquipos($equipos, ?int $idSucursal): ?array
+    {
+        if (! is_array($equipos)) {
+            return ['equipos_frio' => 'Los congeladores y refrigeradores no son válidos.'];
+        }
+        if (count($equipos) > 30) {
+            return ['equipos_frio' => 'Máximo 30 equipos por sucursal.'];
+        }
+
+        $nombres = [];
+        foreach (array_values($equipos) as $i => $e) {
+            $nombre = trim((string) ($e['nombre'] ?? ''));
+            if ($nombre === '' || mb_strlen($nombre) > 60) {
+                return ["equipos_frio.{$i}.nombre" => 'Cada equipo necesita un nombre (máx. 60 caracteres).'];
+            }
+            if (isset($nombres[mb_strtolower($nombre)])) {
+                return ["equipos_frio.{$i}.nombre" => "El equipo \"{$nombre}\" está repetido."];
+            }
+            $nombres[mb_strtolower($nombre)] = true;
+
+            if (! in_array(strtoupper((string) ($e['tipo'] ?? '')), SucursalModel::TIPOS_EQUIPO, true)) {
+                return ["equipos_frio.{$i}.tipo" => 'El tipo debe ser congelador o refrigerador.'];
+            }
+            // Las temperaturas no se validan (ni rango ni orden); solo deben venir como número para guardarse
+            foreach (['temp_min' => 'mínima', 'temp_max' => 'máxima'] as $campo => $texto) {
+                if (! is_numeric($e[$campo] ?? null)) {
+                    return ["equipos_frio.{$i}.{$campo}" => "Escribe la temperatura {$texto} de \"{$nombre}\"."];
+                }
+            }
+            if (isset($e['id'])) {
+                $propio = db_connect()->table('equipos_frio')->where('id_equipo', (int) $e['id'])->where('id_sucursal', $idSucursal)->countAllResults() > 0;
+                if (! $propio) {
+                    return ["equipos_frio.{$i}.id" => 'El equipo no pertenece a esta sucursal.'];
                 }
             }
         }

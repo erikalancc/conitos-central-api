@@ -172,3 +172,37 @@ php spark db:seed ChecklistItemsSeeder
 ```
 
 Para agregar, quitar o cambiar un punto hay que editarlo en `checklist_items`: `activo = 0` lo oculta y `orden` define la posición. Más adelante se puede agregar un CRUD para el administrador.
+
+## Checklist por sucursal y equipos de frío (2026-11-07)
+
+- El checklist es **uno por día por sucursal** (la del usuario de la sesión). `GET /checklist/apertura` agrega `sucursal: { id, nombre }`.
+- En el punto `TEMPERATURE_PAIR`, `config.sensores` ya no es fijo: son los **equipos activos de la sucursal**: `{ clave: "equipo-{id}", id_equipo, nombre, tipo, min, max }`. Si la sucursal no tiene equipos, la lista viene vacía y no se piden temperaturas.
+- En `POST /checklist/apertura`, `temperaturas` se envía por clave: `{ "equipo-1": -18.5, "equipo-4": 3 }` (se aceptan negativos).
+- Cada lectura se guarda con `id_equipo`, nombre del equipo y el rango vigente (`temp_min`, `temp_max`), para que el historial no cambie si después se edita el equipo.
+
+## Checklist configurable por momento (2026-11-08)
+
+Los puntos ya no son fijos: se configuran en Administración. Hay tres **momentos** y cada uno tiene su registro diario por sucursal:
+
+| Momento (URL) | Cuándo se pide |
+|---|---|
+| `apertura` | Al iniciar el día |
+| `medio-turno` | Desde la mitad del horario de la sucursal (`hora_apertura`–`hora_cierre`; sin horario, 10:00–21:00) |
+| `cierre` | Antes del corte de caja |
+
+- `GET /checklist/{momento}` → `{ fecha, momento, sucursal, disponible, disponible_desde, items, registro }`. Solo trae los puntos activos del momento que aplican a la sucursal del usuario. Si `items` viene vacío, no hay nada que llenar.
+- `POST /checklist/{momento}` guarda el checklist del momento (mismo cuerpo que antes). `POST /checklist/{momento}/omitir`: `403` para el vendedor.
+- `POST /caja/cierre`: al Vendedor / Cajero le responde `409` (*Completa el checklist de antes del corte…*) si el momento `cierre` tiene puntos y hoy no se completó.
+- El punto de **refrigeradores y congeladores** es fijo (`es_fijo`): siempre está en la apertura y no se edita ni se borra.
+
+## Administración: `/admin/checklist` (solo Administrador)
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/admin/checklist` | `{ items, sucursales }`. Cada punto trae `momento`, `tipo_campo`, `config`, `es_obligatorio`, `es_fijo`, `activo`, `sucursales` (vacío = todas) y `usado` |
+| POST | `/admin/checklist` | Alta de punto |
+| PUT | `/admin/checklist/{id}` | Edición (cuerpo completo). `409` si es el punto fijo |
+| DELETE | `/admin/checklist/{id}` | `409` si es fijo o si ya tiene respuestas (hay que desactivarlo) |
+
+Cuerpo: `{ titulo*, descripcion, etiqueta_ok, momento* (apertura|medio-turno|cierre), tipo_campo* (BOOLEAN|SELECT|TEXT), opciones (solo SELECT, mínimo 2: [{ texto, nivel: ok|aviso|error }]), sucursales: [ids] (vacío = todas), es_obligatorio, activo }`. Un punto nuevo, o uno que cambia de momento, va al final de su momento.
+

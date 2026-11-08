@@ -31,4 +31,35 @@ abstract class BaseApiController extends BaseController
             return [];
         }
     }
+
+    // roles.id_rol del Vendedor / Cajero
+    protected const ROL_VENDEDOR = 2;
+
+    protected function esVendedor(): bool
+    {
+        return service('sesion')->idRol() === self::ROL_VENDEDOR;
+    }
+
+    /**
+     * Cuántas de las últimas ventas puede ver quien consulta: el límite de su sucursal
+     * (sucursales.ventas_visibles_vendedor) si es vendedor; null = sin límite.
+     */
+    protected function limiteVentas(): ?int
+    {
+        if (! $this->esVendedor()) {
+            return null;
+        }
+        $fila = db_connect()->table('sucursales')->select('ventas_visibles_vendedor')
+            ->where('id_sucursal', service('sesion')->idSucursal())->get()->getRowArray();
+
+        return (int) ($fila['ventas_visibles_vendedor'] ?? 5);
+    }
+
+    // Deja solo las últimas ventas permitidas (la lista viene en orden cronológico)
+    protected function ventasVisibles(array $ventas): array
+    {
+        $limite = $this->limiteVentas();
+
+        return $limite === null ? $ventas : array_slice($ventas, max(0, count($ventas) - $limite));
+    }
 }

@@ -52,7 +52,7 @@ El POS manda el `total` que calculó. Si no coincide con el del API (alguien cam
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `cantidad` | int | 1 a 99 |
-| `sabores` | int[] | Un id por porción (`[1, 1]` = 2× Vainilla). Deben ser tantos como `num_sabores` de la presentación, activos y del `tipo_sabor` del producto. Vacío si el producto no lleva sabor |
+| `sabores` | int[] | Un id por porción (`[1, 1]` = 2× Vainilla). Deben ser tantos como `num_sabores` de la presentación, activos y que apliquen al `tipo_sabor` del producto (`sabores_tipos`). Vacío si el producto no lleva sabor |
 | `extras` | int[] | Extras activos que el producto ofrece (`productos_extras`) |
 | `notas` | string | Máx. 255. En combos, qué lleva |
 
@@ -195,3 +195,9 @@ Ventas de un día con todo su detalle, en orden de hora.
 |---|---|
 | 400 | Fecha con formato inválido, `desde` posterior a `hasta` o rango mayor a 366 días |
 | 401 / 403 | Sin token, token vencido o rol sin acceso |
+
+## Vendedor / Cajero (2026-11-08)
+
+- `GET /ventas?fecha=`: el vendedor solo puede consultar **hoy** (otra fecha → `403`) y recibe solo sus **últimas N ventas** (`ventas_visibles: N`, de su sucursal). Para el Administrador `ventas_visibles` es `null`.
+- `GET /ventas/resumen`: `403` para el vendedor.
+

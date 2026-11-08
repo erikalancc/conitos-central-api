@@ -3,6 +3,7 @@
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\Api\BaseApiController;
+use App\Models\ChecklistRegistroModel;
 use App\Models\CorteModel;
 
 /**
@@ -13,13 +14,31 @@ class Caja extends BaseApiController
 {
     private const MAX_DIAS_CONSULTA = 366;
 
-    // GET /api/v1/caja/turno — turno abierto con sus totales en vivo y sus ventas (null si la caja está cerrada)
+    /**
+     * GET /api/v1/caja/turno — turno abierto con sus totales en vivo y sus ventas.
+     * Con la caja cerrada: { turno: null, fondo_sugerido } (lo que se dejó de fondo en el último corte).
+     */
     public function turno()
     {
         $modelo  = model(CorteModel::class);
         $abierto = $modelo->abierto();
 
-        return $this->ok(['turno' => $abierto === null ? null : $modelo->detalle((int) $abierto['id_corte'], true)]);
+        return $this->ok($abierto === null
+            ? ['turno' => null, 'fondo_sugerido' => $modelo->fondoSugerido()]
+            : ['turno' => $this->turnoVisible((int) $abierto['id_corte'])]);
+    }
+
+    /**
+     * Detalle del turno para quien consulta. Los totales siempre son del turno completo;
+     * al vendedor solo se le envían sus últimas ventas permitidas (ventas_visibles = límite, null = todas).
+     */
+    private function turnoVisible(int $idCorte): array
+    {
+        $turno                   = model(CorteModel::class)->detalle($idCorte, true);
+        $turno['ventas_detalle'] = $this->ventasVisibles($turno['ventas_detalle']);
+        $turno['ventas_visibles'] = $this->limiteVentas();
+
+        return $turno;
     }
 
     // POST /api/v1/caja/apertura — { fondo_inicial, comentario? }
@@ -45,7 +64,7 @@ class Caja extends BaseApiController
             trim((string) ($datos['comentario'] ?? '')) ?: null
         );
 
-        return $this->ok(['turno' => $modelo->detalle($id, true)], 201);
+        return $this->ok(['turno' => $this->turnoVisible($id)], 201);
     }
 
     // POST /api/v1/caja/movimientos — { tipo: entrada|retiro, monto, concepto }
@@ -79,12 +98,13 @@ class Caja extends BaseApiController
 
         $modelo->registrarMovimiento($idCorte, service('sesion')->idUsuario(), $datos['tipo'], $monto, trim($datos['concepto']));
 
-        return $this->ok(['turno' => $modelo->detalle($idCorte, true)], 201);
+        return $this->ok(['turno' => $this->turnoVisible($idCorte)], 201);
     }
 
     /**
      * POST /api/v1/caja/cierre — corte Z del turno abierto.
-     * { conteo: { "500": 2, "20": 1 }, tarjeta_terminal, vouchers, observaciones }
+     * { conteo: { "500": 2, "20": 1 }, fondo_siguiente, tarjeta_terminal, vouchers, observaciones }
+     * fondo_siguiente: efectivo que se queda en gaveta para el siguiente turno (0 a lo contado).
      */
     public function cerrar()
     {
@@ -93,6 +113,10 @@ class Caja extends BaseApiController
         $abierto = $modelo->abierto();
         if ($abierto === null) {
             return $this->fail(['error' => 'No hay caja abierta.'], 409);
+        }
+        // El vendedor debe completar antes el checklist de cierre de su sucursal (si tiene puntos configurados)
+        if ($this->esVendedor() && model(ChecklistRegistroModel::class)->faltaCompletar('CIERRE', service('sesion')->idSucursal())) {
+            return $this->fail(['error' => 'Completa el checklist de antes del corte para poder cerrar el turno.'], 409);
         }
 
         $idCorte = (int) $abierto['id_corte'];
@@ -113,6 +137,16 @@ class Caja extends BaseApiController
         }
         $contado  = round(array_sum(array_map(static fn ($d, $p) => (float) $d * $p, array_keys($conteo), $conteo)), 2);
         $esperado = $turno['efectivo']['esperado'];
+
+        // Fondo para el siguiente turno: sale del efectivo contado
+        $fondoSiguiente = $datos['fondo_siguiente'] ?? null;
+        if (! is_numeric($fondoSiguiente) || $fondoSiguiente < 0) {
+            return $this->failValidationErrors(['fondo_siguiente' => 'Indica cuánto efectivo se deja de fondo para el siguiente turno.']);
+        }
+        $fondoSiguiente = round((float) $fondoSiguiente, 2);
+        if ($fondoSiguiente > $contado) {
+            return $this->failValidationErrors(['fondo_siguiente' => 'El fondo no puede ser mayor al efectivo contado.']);
+        }
 
         $sistemaTarjeta = $turno['tarjeta']['sistema'];
         $terminal       = $datos['tarjeta_terminal'] ?? null;
@@ -147,6 +181,7 @@ class Caja extends BaseApiController
             'retiros'             => $turno['efectivo']['retiros'],
             'efectivo_esperado'   => $esperado,
             'efectivo_contado'    => $contado,
+            'fondo_siguiente'     => $fondoSiguiente,
             'diferencia_efectivo' => $difEfectivo,
             'tarjeta_terminal'    => $terminal,
             'vouchers'            => $vouchers,
@@ -154,12 +189,19 @@ class Caja extends BaseApiController
             'observaciones'       => $observaciones ?: null,
         ], $conteo);
 
-        return $this->ok(['corte' => $modelo->detalle($idCorte, true)], 201);
+        $corte                   = $modelo->detalle($idCorte, true);
+        $corte['ventas_detalle'] = $this->ventasVisibles($corte['ventas_detalle']);
+
+        return $this->ok(['corte' => $corte], 201);
     }
 
     // GET /api/v1/caja/cortes?desde=AAAA-MM-DD&hasta=AAAA-MM-DD — cortes cerrados (por fecha de apertura)
     public function cortes()
     {
+        if ($this->esVendedor()) {
+            return $this->failForbidden('Los cortes anteriores solo los consulta un administrador.');
+        }
+
         $hasta = $this->request->getGet('hasta') ?: date('Y-m-d');
         $desde = $this->request->getGet('desde') ?: date('Y-m-d', strtotime($hasta . ' -55 days'));
 
@@ -185,6 +227,10 @@ class Caja extends BaseApiController
     // GET /api/v1/caja/cortes/{id} — un corte con todas sus ventas (para reimprimir el ticket)
     public function corte(int $id)
     {
+        if ($this->esVendedor()) {
+            return $this->failForbidden('Los cortes anteriores solo los consulta un administrador.');
+        }
+
         $corte = model(CorteModel::class)->detalle($id, true);
 
         return $corte === null ? $this->failNotFound('El corte no existe.') : $this->ok($corte);
