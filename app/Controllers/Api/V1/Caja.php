@@ -232,7 +232,8 @@ class Caja extends BaseApiController
         return $this->ok([
             'desde'  => $desde,
             'hasta'  => $hasta,
-            'cortes' => array_map(static fn ($id) => $modelo->detalle((int) $id), $modelo->cerradosEntre($desde, $hasta)),
+            // Una sucursal a la vez: la asignada, o la que elija el administrador
+            'cortes' => array_map(static fn ($id) => $modelo->detalle((int) $id), $modelo->cerradosEntre($desde, $hasta, $this->sucursalConsultada())),
         ]);
     }
 
@@ -245,6 +246,7 @@ class Caja extends BaseApiController
 
         $corte = model(CorteModel::class)->detalle($id, true);
 
+        // Solo el administrador llega aquí (el vendedor no consulta cortes) y puede ver los de cualquier sucursal
         return $corte === null ? $this->failNotFound('El corte no existe.') : $this->ok($corte);
     }
 }

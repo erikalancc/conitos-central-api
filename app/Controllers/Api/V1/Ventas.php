@@ -47,12 +47,15 @@ class Ventas extends BaseApiController
             return $this->failValidationErrors($errores);
         }
 
+        // Una sucursal a la vez: la asignada, o la que elija el administrador
+        $idSucursal = $this->sucursalConsultada();
+
         return $this->ok([
             'desde' => $desde,
             'hasta' => $hasta,
-            'dias'  => model(VentaModel::class)->resumenPorDia($desde, $hasta),
+            'dias'  => model(VentaModel::class)->resumenPorDia($desde, $hasta, $idSucursal),
             // Para ofrecer "ver semanas anteriores" solo si de verdad hay ventas antes del rango
-            'hay_anteriores' => model(VentaModel::class)->where('fecha_hora <', $desde . ' 00:00:00')->countAllResults() > 0,
+            'hay_anteriores' => model(VentaModel::class)->hayAnteriores($desde, $idSucursal),
         ]);
     }
 
@@ -70,8 +73,8 @@ class Ventas extends BaseApiController
 
         return $this->ok([
             'fecha'           => $fecha,
-            // El vendedor solo ve las de su sucursal; el administrador, las de todas
-            'ventas'          => $this->ventasVisibles(model(VentaModel::class)->delDia($fecha, $this->esVendedor() ? service('sesion')->idSucursal() : null)),
+            // Una sucursal a la vez: la asignada, o la que elija el administrador
+            'ventas'          => $this->ventasVisibles(model(VentaModel::class)->delDia($fecha, $this->sucursalConsultada())),
             'ventas_visibles' => $this->limiteVentas(),
         ]);
     }

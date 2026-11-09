@@ -35,9 +35,31 @@ abstract class BaseApiController extends BaseController
     // roles.id_rol del Vendedor / Cajero
     protected const ROL_VENDEDOR = 2;
 
+    // roles.id_rol del Administrador
+    protected const ROL_ADMIN = 1;
+
     protected function esVendedor(): bool
     {
         return service('sesion')->idRol() === self::ROL_VENDEDOR;
+    }
+
+    protected function esAdmin(): bool
+    {
+        return service('sesion')->idRol() === self::ROL_ADMIN;
+    }
+
+    /**
+     * Sucursal de la que se consultan ventas y cortes (historial): el administrador puede pedir
+     * cualquiera con ?id_sucursal=; los demás siempre consultan la suya, aunque manden otra.
+     */
+    protected function sucursalConsultada(): ?int
+    {
+        $pedida = $this->request->getGet('id_sucursal');
+        if ($this->esAdmin() && is_string($pedida) && ctype_digit($pedida)) {
+            return (int) $pedida;
+        }
+
+        return service('sesion')->idSucursal();
     }
 
     /**

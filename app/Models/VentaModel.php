@@ -61,36 +61,37 @@ class VentaModel extends Model
     }
 
     /**
-     * Totales por día entre dos fechas (inclusive), del más reciente al más antiguo.
+     * Totales por día entre dos fechas (inclusive) de una sucursal, del más reciente al más antiguo.
      * Cada día trae el desglose por método de pago y quién vendió.
      */
-    public function resumenPorDia(string $desde, string $hasta): array
+    public function resumenPorDia(string $desde, string $hasta, ?int $idSucursal): array
     {
-        $rango = [$desde . ' 00:00:00', $hasta . ' 23:59:59'];
+        $parametros = [$desde . ' 00:00:00', $hasta . ' 23:59:59', $idSucursal];
+        $filtro     = 'v.fecha_hora BETWEEN ? AND ? AND v.id_sucursal <=> ?';
 
         $dias = $this->db->query(
-            'SELECT DATE(v.fecha_hora) AS dia, COUNT(*) AS tickets, SUM(v.subtotal) AS subtotal, SUM(v.descuento) AS descuento,
-                    SUM(v.total) AS total, GROUP_CONCAT(DISTINCT u.nombre ORDER BY u.nombre SEPARATOR ", ") AS vendedores
+            "SELECT DATE(v.fecha_hora) AS dia, COUNT(*) AS tickets, SUM(v.subtotal) AS subtotal, SUM(v.descuento) AS descuento,
+                    SUM(v.total) AS total, GROUP_CONCAT(DISTINCT u.nombre ORDER BY u.nombre SEPARATOR ', ') AS vendedores
              FROM ventas v JOIN usuarios u ON u.id_usuario = v.id_usuario_vendedor
-             WHERE v.fecha_hora BETWEEN ? AND ?
-             GROUP BY DATE(v.fecha_hora) ORDER BY dia DESC',
-            $rango
+             WHERE {$filtro}
+             GROUP BY DATE(v.fecha_hora) ORDER BY dia DESC",
+            $parametros
         )->getResultArray();
 
         $articulos = array_column($this->db->query(
-            'SELECT DATE(v.fecha_hora) AS dia, SUM(d.cantidad) AS articulos
+            "SELECT DATE(v.fecha_hora) AS dia, SUM(d.cantidad) AS articulos
              FROM ventas v JOIN detalle_ventas d ON d.id_venta = v.id_venta
-             WHERE v.fecha_hora BETWEEN ? AND ? GROUP BY DATE(v.fecha_hora)',
-            $rango
+             WHERE {$filtro} GROUP BY DATE(v.fecha_hora)",
+            $parametros
         )->getResultArray(), 'articulos', 'dia');
 
         $porMetodo = [];
         $filas     = $this->db->query(
-            'SELECT DATE(v.fecha_hora) AS dia, m.id_metodo, m.nombre, COUNT(*) AS tickets, SUM(v.total) AS total
+            "SELECT DATE(v.fecha_hora) AS dia, m.id_metodo, m.nombre, COUNT(*) AS tickets, SUM(v.total) AS total
              FROM ventas v JOIN metodos_pago m ON m.id_metodo = v.id_metodo_pago
-             WHERE v.fecha_hora BETWEEN ? AND ?
-             GROUP BY DATE(v.fecha_hora), m.id_metodo, m.nombre ORDER BY m.id_metodo',
-            $rango
+             WHERE {$filtro}
+             GROUP BY DATE(v.fecha_hora), m.id_metodo, m.nombre ORDER BY m.id_metodo",
+            $parametros
         )->getResultArray();
         foreach ($filas as $f) {
             $porMetodo[$f['dia']][] = [
@@ -113,15 +114,19 @@ class VentaModel extends Model
         ], $dias);
     }
 
-    // Ventas de un día con su detalle (productos, sabores, extras), en orden de hora; con sucursal, solo las de esa sucursal
-    public function delDia(string $fecha, ?int $idSucursal = null): array
+    // Ventas de un día de una sucursal con su detalle (productos, sabores, extras), en orden de hora
+    public function delDia(string $fecha, ?int $idSucursal): array
     {
-        return $this->conDetalle(function ($query) use ($fecha, $idSucursal) {
-            $query->where('v.fecha_hora >=', $fecha . ' 00:00:00')->where('v.fecha_hora <=', $fecha . ' 23:59:59');
-            if ($idSucursal !== null) {
-                $query->where('v.id_sucursal', $idSucursal);
-            }
-        });
+        return $this->conDetalle(fn ($query) => $query
+            ->where('v.fecha_hora >=', $fecha . ' 00:00:00')
+            ->where('v.fecha_hora <=', $fecha . ' 23:59:59')
+            ->where('v.id_sucursal', $idSucursal));
+    }
+
+    // ¿La sucursal tiene ventas antes de una fecha? (para ofrecer "ver semanas anteriores")
+    public function hayAnteriores(string $fecha, ?int $idSucursal): bool
+    {
+        return $this->where('fecha_hora <', $fecha . ' 00:00:00')->where('id_sucursal', $idSucursal)->countAllResults() > 0;
     }
 
     // Ventas de un turno de caja con su detalle

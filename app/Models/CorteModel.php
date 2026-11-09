@@ -161,11 +161,12 @@ class CorteModel extends Model
         $this->db->transComplete();
     }
 
-    // Turnos cerrados que se abrieron entre dos fechas (más recientes primero)
-    public function cerradosEntre(string $desde, string $hasta): array
+    // Turnos cerrados de una sucursal que se abrieron entre dos fechas (más recientes primero)
+    public function cerradosEntre(string $desde, string $hasta, ?int $idSucursal): array
     {
         return array_column($this->select('id_corte')
             ->where('estado', 'CERRADO')
+            ->where('id_sucursal', $idSucursal)
             ->where('fecha_apertura >=', $desde . ' 00:00:00')
             ->where('fecha_apertura <=', $hasta . ' 23:59:59')
             ->orderBy('fecha_apertura', 'DESC')
