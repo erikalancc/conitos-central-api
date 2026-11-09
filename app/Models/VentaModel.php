@@ -11,7 +11,7 @@ class VentaModel extends Model
     protected $primaryKey    = 'id_venta';
     protected $returnType    = 'array';
     protected $allowedFields = [
-        'folio_orden', 'id_corte', 'id_usuario_vendedor', 'fecha_hora', 'cliente', 'tipo_servicio', 'id_metodo_pago',
+        'folio_orden', 'id_corte', 'id_sucursal', 'id_usuario_vendedor', 'fecha_hora', 'cliente', 'tipo_servicio', 'id_metodo_pago',
         'subtotal', 'descuento', 'descuento_concepto', 'total', 'monto_recibido', 'cambio',
     ];
 
@@ -113,12 +113,15 @@ class VentaModel extends Model
         ], $dias);
     }
 
-    // Ventas de un día con su detalle (productos, sabores, extras), en orden de hora
-    public function delDia(string $fecha): array
+    // Ventas de un día con su detalle (productos, sabores, extras), en orden de hora; con sucursal, solo las de esa sucursal
+    public function delDia(string $fecha, ?int $idSucursal = null): array
     {
-        return $this->conDetalle(fn ($query) => $query
-            ->where('v.fecha_hora >=', $fecha . ' 00:00:00')
-            ->where('v.fecha_hora <=', $fecha . ' 23:59:59'));
+        return $this->conDetalle(function ($query) use ($fecha, $idSucursal) {
+            $query->where('v.fecha_hora >=', $fecha . ' 00:00:00')->where('v.fecha_hora <=', $fecha . ' 23:59:59');
+            if ($idSucursal !== null) {
+                $query->where('v.id_sucursal', $idSucursal);
+            }
+        });
     }
 
     // Ventas de un turno de caja con su detalle

@@ -8,23 +8,31 @@ use App\Models\CorteModel;
 
 /**
  * Caja: apertura del turno con fondo, entradas/retiros de efectivo y corte Z.
+ * Cada sucursal tiene su propia caja: el usuario siempre trabaja con el turno de su sucursal
+ * y el corte solo incluye las ventas cobradas en ella.
  * Los totales y diferencias se calculan aquí con las ventas registradas del turno.
  */
 class Caja extends BaseApiController
 {
     private const MAX_DIAS_CONSULTA = 366;
 
+    // Sucursal de trabajo de quien hace la petición (la suya o la matriz)
+    private function idSucursal(): ?int
+    {
+        return service('sesion')->idSucursal();
+    }
+
     /**
-     * GET /api/v1/caja/turno — turno abierto con sus totales en vivo y sus ventas.
-     * Con la caja cerrada: { turno: null, fondo_sugerido } (lo que se dejó de fondo en el último corte).
+     * GET /api/v1/caja/turno — turno abierto de la sucursal con sus totales en vivo y sus ventas.
+     * Con la caja cerrada: { turno: null, fondo_sugerido } (lo que se dejó de fondo en el último corte de la sucursal).
      */
     public function turno()
     {
         $modelo  = model(CorteModel::class);
-        $abierto = $modelo->abierto();
+        $abierto = $modelo->abierto($this->idSucursal());
 
         return $this->ok($abierto === null
-            ? ['turno' => null, 'fondo_sugerido' => $modelo->fondoSugerido()]
+            ? ['turno' => null, 'fondo_sugerido' => $modelo->fondoSugerido($this->idSucursal())]
             : ['turno' => $this->turnoVisible((int) $abierto['id_corte'])]);
     }
 
@@ -54,11 +62,15 @@ class Caja extends BaseApiController
         }
 
         $modelo = model(CorteModel::class);
-        if ($modelo->abierto() !== null) {
-            return $this->fail(['error' => 'La caja ya está abierta. Haz el corte antes de abrir un nuevo turno.'], 409);
+        if ($this->idSucursal() === null) {
+            return $this->fail(['error' => 'Tu usuario no tiene una sucursal activa asignada. Pide a un administrador que te asigne una.'], 409);
+        }
+        if ($modelo->abierto($this->idSucursal()) !== null) {
+            return $this->fail(['error' => 'La caja de esta sucursal ya está abierta. Haz el corte antes de abrir un nuevo turno.'], 409);
         }
 
         $id = $modelo->abrir(
+            $this->idSucursal(),
             service('sesion')->idUsuario(),
             round((float) $datos['fondo_inicial'], 2),
             trim((string) ($datos['comentario'] ?? '')) ?: null
@@ -81,7 +93,7 @@ class Caja extends BaseApiController
         }
 
         $modelo  = model(CorteModel::class);
-        $abierto = $modelo->abierto();
+        $abierto = $modelo->abierto($this->idSucursal());
         if ($abierto === null) {
             return $this->fail(['error' => 'No hay caja abierta. Abre caja antes de registrar movimientos.'], 409);
         }
@@ -110,7 +122,7 @@ class Caja extends BaseApiController
     {
         $datos   = $this->cuerpo();
         $modelo  = model(CorteModel::class);
-        $abierto = $modelo->abierto();
+        $abierto = $modelo->abierto($this->idSucursal());
         if ($abierto === null) {
             return $this->fail(['error' => 'No hay caja abierta.'], 409);
         }

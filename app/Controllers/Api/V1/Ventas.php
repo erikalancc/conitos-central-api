@@ -70,7 +70,8 @@ class Ventas extends BaseApiController
 
         return $this->ok([
             'fecha'           => $fecha,
-            'ventas'          => $this->ventasVisibles(model(VentaModel::class)->delDia($fecha)),
+            // El vendedor solo ve las de su sucursal; el administrador, las de todas
+            'ventas'          => $this->ventasVisibles(model(VentaModel::class)->delDia($fecha, $this->esVendedor() ? service('sesion')->idSucursal() : null)),
             'ventas_visibles' => $this->limiteVentas(),
         ]);
     }
@@ -144,10 +145,13 @@ class Ventas extends BaseApiController
             $cambio = round($recibido - $total, 2);
         }
 
-        $idVenta = model(VentaModel::class)->registrar([
+        // La venta es de la sucursal del vendedor y entra al turno abierto de esa sucursal
+        // (si no hay, se asigna cuando esa sucursal abra caja ese día)
+        $idSucursal = service('sesion')->idSucursal();
+        $idVenta    = model(VentaModel::class)->registrar([
             'folio_orden'         => isset($datos['folio_orden']) ? (int) $datos['folio_orden'] : null,
-            // Turno de caja abierto (si no hay, la venta se asigna al abrir caja ese día)
-            'id_corte'            => model(CorteModel::class)->abierto()['id_corte'] ?? null,
+            'id_corte'            => model(CorteModel::class)->abierto($idSucursal)['id_corte'] ?? null,
+            'id_sucursal'         => $idSucursal,
             'id_usuario_vendedor' => service('sesion')->idUsuario(),
             'fecha_hora'          => date('Y-m-d H:i:s'),
             'cliente'             => trim((string) ($datos['cliente'] ?? '')) ?: null,

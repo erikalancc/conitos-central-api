@@ -18,35 +18,37 @@ class CorteModel extends Model
     protected $primaryKey    = 'id_corte';
     protected $returnType    = 'array';
     protected $allowedFields = [
-        'estado', 'id_usuario_apertura', 'fecha_apertura', 'fondo_inicial', 'comentario_apertura',
+        'estado', 'id_sucursal', 'id_usuario_apertura', 'fecha_apertura', 'fondo_inicial', 'comentario_apertura',
         'id_usuario_cierre', 'fecha_cierre', 'tickets', 'ventas_brutas', 'descuentos', 'ventas_netas',
         'ventas_efectivo', 'ventas_tarjeta', 'entradas', 'retiros', 'efectivo_esperado', 'efectivo_contado', 'fondo_siguiente',
         'diferencia_efectivo', 'tarjeta_terminal', 'vouchers', 'diferencia_tarjeta', 'observaciones',
     ];
 
-    public function abierto(): ?array
+    // Turno abierto de la sucursal: cada sucursal tiene su propia caja
+    public function abierto(?int $idSucursal): ?array
     {
-        return $this->where('estado', 'ABIERTO')->orderBy('id_corte', 'DESC')->first();
+        return $this->where('estado', 'ABIERTO')->where('id_sucursal', $idSucursal)->orderBy('id_corte', 'DESC')->first();
     }
 
-    // Fondo que se dejó en el último corte: se propone como fondo inicial al abrir caja (null si no hay)
-    public function fondoSugerido(): ?float
+    // Fondo que se dejó en el último corte de la sucursal: se propone como fondo inicial al abrir caja (null si no hay)
+    public function fondoSugerido(?int $idSucursal): ?float
     {
-        $fila = $this->select('fondo_siguiente')->where('estado', 'CERRADO')->where('fondo_siguiente IS NOT NULL')
-            ->orderBy('fecha_cierre', 'DESC')->first();
+        $fila = $this->select('fondo_siguiente')->where('estado', 'CERRADO')->where('id_sucursal', $idSucursal)
+            ->where('fondo_siguiente IS NOT NULL')->orderBy('fecha_cierre', 'DESC')->first();
 
         return $fila === null ? null : round((float) $fila['fondo_siguiente'], 2);
     }
 
     /**
-     * Abre un turno y le asigna las ventas de hoy que se cobraron sin caja abierta.
+     * Abre un turno de la sucursal y le asigna las ventas de hoy de esa sucursal que se cobraron sin caja abierta.
      */
-    public function abrir(int $idUsuario, float $fondo, ?string $comentario): int
+    public function abrir(?int $idSucursal, int $idUsuario, float $fondo, ?string $comentario): int
     {
         $this->db->transException(true)->transStart();
 
         $id = (int) $this->insert([
             'estado'              => 'ABIERTO',
+            'id_sucursal'         => $idSucursal,
             'id_usuario_apertura' => $idUsuario,
             'fecha_apertura'      => date('Y-m-d H:i:s'),
             'fondo_inicial'       => $fondo,
@@ -55,6 +57,7 @@ class CorteModel extends Model
 
         $this->db->table('ventas')
             ->where('id_corte', null)
+            ->where('id_sucursal', $idSucursal)
             ->where('fecha_hora >=', date('Y-m-d 00:00:00'))
             ->update(['id_corte' => $id]);
 
@@ -176,7 +179,8 @@ class CorteModel extends Model
     public function detalle(int $idCorte, bool $conVentas = false): ?array
     {
         $c = $this->db->table('cortes_caja c')
-            ->select('c.*, ua.nombre AS usuario_apertura, uc.nombre AS usuario_cierre')
+            ->select('c.*, ua.nombre AS usuario_apertura, uc.nombre AS usuario_cierre, s.nombre AS sucursal')
+            ->join('sucursales s', 's.id_sucursal = c.id_sucursal', 'left')
             ->join('usuarios ua', 'ua.id_usuario = c.id_usuario_apertura')
             ->join('usuarios uc', 'uc.id_usuario = c.id_usuario_cierre', 'left')
             ->where('c.id_corte', $idCorte)
@@ -202,6 +206,7 @@ class CorteModel extends Model
         $detalle = [
             'id'       => (int) $c['id_corte'],
             'estado'   => strtolower($c['estado']),
+            'sucursal' => $c['id_sucursal'] === null ? null : ['id' => (int) $c['id_sucursal'], 'nombre' => $c['sucursal']],
             'apertura' => [
                 'fecha'      => date(DATE_ATOM, strtotime($c['fecha_apertura'])),
                 'usuario'    => $c['usuario_apertura'],
